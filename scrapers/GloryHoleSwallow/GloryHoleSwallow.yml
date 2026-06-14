@@ -1,0 +1,16 @@
+name: GloryHoleSwallow
+# requires: py_common
+
+sceneByURL:
+  - action: script
+    url:
+      - gloryholeswallow.com
+      - cumpsters.com
+      - spytug.com
+      - cumclinic.com
+    script:
+      - python
+      - GloryHoleSwallow.py
+      - scene-by-url
+
+
