@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 from datetime import datetime
@@ -10,27 +11,104 @@ import py_common.log as log
 from lxml import html
 from py_common.proxy import StashRequests
 from py_common.util import scraper_args
+from py_common.config import get_config
+
+config = get_config(
+    # NOTE: Need to use `<equal_sign>` rather than literal `=` in the example in the comment
+    # because config parser prioritizes looking for `=` over looking for `#`
+    default="""
+    # Set your member auth cookies (pcar...) here for each site to scrape member content
+    # Can be the full cookie (name<equal_sign>value) or just the cookie value itself.
+    # e.g. can set to pcar%5fR2xvcnlIb2xlU3dhbGx3bw%3d%3d<equal_sign>ZlN4bTh1OWFzZGRmYTg...
+    # or just ZlN4bTh1OWFzZGRmYTg...
+    GLORYHOLESWALLOW_PCAR =
+    CUMPSTERS_PCAR =
+    SPYTUG_PCAR =
+    CUMCLINIC_PCAR =
+"""
+)
 
 requests = StashRequests()
 
 
+def get_pcar_cookie(domain: str) -> str:
+    val = ""
+    if "gloryholeswallow" in domain:
+        val = config["GLORYHOLESWALLOW_PCAR"]
+    elif "cumpsters" in domain:
+        val = config["CUMPSTERS_PCAR"]
+    elif "spytug" in domain:
+        val = config["SPYTUG_PCAR"]
+    elif "cumclinic" in domain:
+        val = config["CUMCLINIC_PCAR"]
+    
+    if val:
+        val = str(val).strip().strip("\"'")
+        if "=" in val:
+            parts = val.split("=", 1)
+            if parts[0].strip().lower().startswith("pcar"):
+                val = parts[1].strip().strip("\"'")
+    return val
+
+
+def get_cookie_name(domain: str) -> str:
+    if "gloryholeswallow" in domain:
+        name = "GloryHoleSwallwo"
+    elif "cumpsters" in domain:
+        name = "Cumpsters"
+    elif "spytug" in domain:
+        name = "SpyTug"
+    elif "cumclinic" in domain:
+        name = "CumClinic"
+    else:
+        return ""
+    
+    b64_name = base64.b64encode(name.encode('utf-8')).decode('utf-8')
+    return f"pcar%5f{b64_name.replace('=', '%3d')}"
+
+
 def rewrite_members_url(url: str) -> str:
-    """Rewrite members scenes URL to public tour trailer URL if matched."""
-    # TODO: Use .ini file to get members' logged-in cookies and scrape the members page, and potentially rewrite to add public URL to scrape (after checking that it doesn't 404).
+    """Rewrite members scenes URL to public tour trailer URL if matched, unless we have cookies."""
+    # TODO: Check whether a public URL is available and add it to output if so. If not, include tag `Members Only`
+    # TODO: Use stem of download filenames as studio code
+
     # regex: \/members\/scenes\/(.*)_vids\.html -> /tour/trailers/$1.html
     match = re.search(r'/members/scenes/(.*)_vids\.html', url, re.IGNORECASE)
     if match:
+        domain = urlparse(url).netloc.lower()
+        cookie_val = get_pcar_cookie(domain)
+        if cookie_val:
+            log.debug("Found member cookie for domain. Skipping rewrite.")
+            return url
+        # No relevant cookie, do rewrite
         scene_id = match.group(1)
         url = re.sub(r'/members/scenes/.*_vids\.html', f'/tour/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
         log.debug(f"Rewrote members URL to: {url}")
     return url
 
+
 def scrape_scene_data(url: str) -> dict:
     url = rewrite_members_url(url)
     
     log.debug(f"Fetching scene URL: {url}")
+    
+    domain = urlparse(url).netloc.lower()
+    # TODO: Only look up and use cookies if this is a members' URL
+    cookie_val = get_pcar_cookie(domain)
+    
+    cookies = {}
+    log.debug(f"cookie_val: {cookie_val}")
+    if cookie_val:
+        cookie_name = get_cookie_name(domain)
+        log.debug(f"cookie_name: {cookie_name}")
+        if cookie_name:
+            cookies[cookie_name] = cookie_val
+            cookies["warn"] = "true"
+            redacted = cookie_val[:2] + "..." + cookie_val[-2:] if len(cookie_val) >= 5 else "REDACTED"
+            log.debug(f"Using cookie authentication: '{cookie_name}' = '{redacted}'")
+            
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, cookies=cookies, timeout=10)
         response.raise_for_status()
     except Exception as e:
         log.error(f"Failed to fetch URL {url}: {e}")
@@ -71,6 +149,7 @@ def scrape_scene_data(url: str) -> dict:
             scene["details"] = "\n\n".join(details_parts)
 
     # Extract Tags
+    # TODO: Perhaps if it's a VIP scene we should add `Bonus Scenes` tag
     # XPath: //div[@class='objectInfo']//p[contains(text(),'Tags')]//a/text()
     tag_links = tree.xpath("//div[@class='objectInfo']//p[contains(text(),'Tags')]//a")
     if tag_links:
