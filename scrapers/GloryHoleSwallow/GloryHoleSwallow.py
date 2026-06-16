@@ -87,6 +87,75 @@ def rewrite_members_url(url: str) -> str:
     return url
 
 
+def get_title_text(tree) -> str:
+    meta_titles = tree.xpath("//meta[@property='og:title']/@content")
+    title_text = ""
+    if meta_titles:
+        title_text = meta_titles[0].strip()
+
+    if not title_text:
+        fallback_titles = tree.xpath("//div[@class='objectInfo']/h1")
+        if fallback_titles:
+            title_text = fallback_titles[0].text_content().strip()
+    return title_text
+
+
+def get_release_date(tree, title_text: str) -> str:
+    if not title_text:
+        return ""
+    m1 = re.search(r'([A-Za-z]+)\.?\s*(\d{1,2}),\s*(\d{4})', title_text)
+    if m1:
+        month_str, day_str, year_str = m1.groups()
+        month_str = month_str[:3].title()
+        try:
+            dt = datetime.strptime(f"{month_str} {day_str} {year_str}", "%b %d %Y")
+            date_str = dt.strftime("%Y-%m-%d")
+            log.debug(f"Extracted date: {date_str}")
+            return date_str
+        except ValueError:
+            pass
+    return ""
+
+
+def get_details(tree) -> str:
+    paragraphs = tree.xpath("//div[@class='objectInfo']/div[@class='content']/p")
+    if paragraphs:
+        details_parts = [p.text_content().strip() for p in paragraphs if p.text_content().strip()]
+        if details_parts:
+            return "\n\n".join(details_parts)
+    return ""
+
+
+def get_tags(tree) -> list:
+    tag_links = tree.xpath("//div[@class='objectInfo']//p[contains(text(),'Tags')]//a")
+    tags = []
+    if tag_links:
+        for link in tag_links:
+            name = link.text_content().strip()
+            if name:
+                tags.append({"name": name})
+    return tags
+
+
+def get_image(tree, base_url: str = "") -> str:
+    if not base_url:
+        canonical_links = tree.xpath("//link[@rel='canonical']/@href")
+        if canonical_links:
+            base_url = canonical_links[0].strip()
+            
+    base_hrefs = tree.xpath("//base/@href")
+    if base_hrefs:
+        base_url = base_hrefs[0].strip()
+        
+    img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
+    if img_srcs:
+        img_src = img_srcs[0].strip()
+        if base_url:
+            return urljoin(base_url, img_src)
+        return img_src
+    return ""
+
+
 def scrape_scene_data(url: str) -> dict:
     url = rewrite_members_url(url)
     
@@ -118,61 +187,29 @@ def scrape_scene_data(url: str) -> dict:
     scene = {}
 
     # Extract Title and Date
-    # XPath: //meta[@property='og:title']/@content
-    meta_titles = tree.xpath("//meta[@property='og:title']/@content")
-    title_text = ""
-    if meta_titles:
-        title_text = meta_titles[0].strip()
+    title_text = get_title_text(tree)
+    if title_text:
         scene["title"] = title_text
 
-    # Extract Date from Title (where the date is displayed inside the title string)
-    if title_text:
-        # Try to parse current date format, e.g. Jun. 12, 2024 or June 12, 2024
-        m1 = re.search(r'([A-Za-z]+)\.?\s*(\d{1,2}),\s*(\d{4})', title_text)
-        if m1:
-            month_str, day_str, year_str = m1.groups()
-            month_str = month_str[:3].title()
-            try:
-                dt = datetime.strptime(f"{month_str} {day_str} {year_str}", "%b %d %Y")
-                date_str = dt.strftime("%Y-%m-%d")
-                scene["date"] = date_str
-                log.debug(f"Extracted date: {date_str}")
-            except ValueError:
-                pass
+    date_str = get_release_date(tree, title_text)
+    if date_str:
+        scene["date"] = date_str
 
     # Extract Details
-    # XPath: //div[@class='objectInfo']/div[@class='content']/p/text() joined by "\n\n"
-    paragraphs = tree.xpath("//div[@class='objectInfo']/div[@class='content']/p")
-    if paragraphs:
-        details_parts = [p.text_content().strip() for p in paragraphs if p.text_content().strip()]
-        if details_parts:
-            scene["details"] = "\n\n".join(details_parts)
+    details = get_details(tree)
+    if details:
+        scene["details"] = details
 
     # Extract Tags
-    # TODO: Perhaps if it's a VIP scene we should add `Bonus Scenes` tag
-    # XPath: //div[@class='objectInfo']//p[contains(text(),'Tags')]//a/text()
-    tag_links = tree.xpath("//div[@class='objectInfo']//p[contains(text(),'Tags')]//a")
-    if tag_links:
-        tags = []
-        for link in tag_links:
-            name = link.text_content().strip()
-            if name:
-                tags.append({"name": name})
-        if tags:
-            scene["tags"] = tags
+    tags = get_tags(tree)
+    if tags:
+        scene["tags"] = tags
 
     # Extract Image URL
-    # XPath: //base/@href | //div[@id='fakeplayer']//img/@src | //div[@id='fakeplayer']//img/@src0_1x
-    base_hrefs = tree.xpath("//base/@href")
-    base_url = base_hrefs[0].strip() if base_hrefs else url
-    
-    img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
-    if img_srcs:
-        img_src = img_srcs[0].strip()
-        # Resolve relative/absolute URLs safely
-        resolved_img_url = urljoin(base_url, img_src)
-        scene["image"] = resolved_img_url
-        log.debug(f"Extracted image URL: {resolved_img_url}")
+    image_url = get_image(tree, url)
+    if image_url:
+        scene["image"] = image_url
+        log.debug(f"Extracted image URL: {image_url}")
 
     # Extract Studio
     # Map domain names to Studio names
