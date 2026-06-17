@@ -53,7 +53,7 @@ def get_pcar_cookie(domain: str) -> str:
 
 def get_cookie_name(domain: str) -> str:
     if "gloryholeswallow" in domain:
-        name = "GloryHoleSwallwo"
+        name = "GloryHoleSwallwo" # [sic]
     elif "cumpsters" in domain:
         name = "Cumpsters"
     elif "spytug" in domain:
@@ -66,25 +66,33 @@ def get_cookie_name(domain: str) -> str:
     b64_name = base64.b64encode(name.encode('utf-8')).decode('utf-8')
     return f"pcar%5f{b64_name.replace('=', '%3d')}"
 
+def has_valid_cookie(url: str) -> bool:
+    domain = urlparse(url).netloc.lower()
+    cookie_val = get_pcar_cookie(domain)
+    if cookie_val:
+        return True
+    return False
 
-def rewrite_members_url(url: str) -> str:
+def get_presumed_public_url(url: str) -> str:
+    match = re.search(r'/members/scenes/(.*)_vids\.html', url, re.IGNORECASE)
+    if match:
+        scene_id = match.group(1)
+        url = re.sub(r'/members/scenes/.*_vids\.html', f'/tour/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
+    return url
+
+def get_url_to_scrape(url: str) -> str:
     """Rewrite members scenes URL to public tour trailer URL if matched, unless we have cookies."""
     # TODO: Check whether a public URL is available and add it to output if so. If not, include tag `Members Only`
     # TODO: Use stem of download filenames as studio code
 
-    # regex: \/members\/scenes\/(.*)_vids\.html -> /tour/trailers/$1.html
-    match = re.search(r'/members/scenes/(.*)_vids\.html', url, re.IGNORECASE)
-    if match:
-        domain = urlparse(url).netloc.lower()
-        cookie_val = get_pcar_cookie(domain)
-        if cookie_val:
-            log.debug("Found member cookie for domain. Skipping rewrite.")
-            return url
-        # No relevant cookie, do rewrite
-        scene_id = match.group(1)
-        url = re.sub(r'/members/scenes/.*_vids\.html', f'/tour/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
-        log.debug(f"Rewrote members URL to: {url}")
-    return url
+    presumed_public_url = get_presumed_public_url(url)
+    if presumed_public_url == url:
+        return url
+    if has_valid_cookie(url):
+        log.debug("Found member cookie for domain. Skipping rewrite.")
+        return url
+    else:
+        return presumed_public_url
 
 
 def get_title_text(tree) -> str:
@@ -100,20 +108,36 @@ def get_title_text(tree) -> str:
     return title_text
 
 
-def get_release_date(tree, title_text: str) -> str:
-    if not title_text:
+def parse_date_string(date_text: str) -> str:
+    if not date_text:
         return ""
-    m1 = re.search(r'([A-Za-z]+)\.?\s*(\d{1,2}),\s*(\d{4})', title_text)
-    if m1:
-        month_str, day_str, year_str = m1.groups()
+    m = re.search(r'([A-Za-z]+)\.?\s*(\d{1,2}),\s*(\d{4})', date_text)
+    if m:
+        month_str, day_str, year_str = m.groups()
         month_str = month_str[:3].title()
         try:
             dt = datetime.strptime(f"{month_str} {day_str} {year_str}", "%b %d %Y")
-            date_str = dt.strftime("%Y-%m-%d")
-            log.debug(f"Extracted date: {date_str}")
-            return date_str
+            return dt.strftime("%Y-%m-%d")
         except ValueError:
             pass
+    return ""
+
+
+def get_release_date(tree, title_text: str) -> str:
+    # 1. Try extracting explicit release date (i.e. on members pages)
+    released_spans = tree.xpath("//div[@class='objectInfo']//p[contains(., 'Released')]/span")
+    if released_spans:
+        date_str = parse_date_string(released_spans[0].text_content().strip())
+        if date_str:
+            log.debug(f"Found explicit release date: {date_str}")
+            return date_str
+
+    # 2. Fallback to extracting from the title (i.e. logged-out pages)
+    if title_text:
+        date_str = parse_date_string(title_text)
+        if date_str:
+            log.debug(f"Extracted release date from title: {date_str}")
+            return date_str
     return ""
 
 
@@ -138,26 +162,51 @@ def get_tags(tree) -> list:
 
 
 def get_image(tree, base_url: str = "") -> str:
-    if not base_url:
-        canonical_links = tree.xpath("//link[@rel='canonical']/@href")
-        if canonical_links:
-            base_url = canonical_links[0].strip()
-            
+    relative_image_url = ""
+
+    # When logged-in, cover image URL is only avaialable as part of an inline script, as `useimage = "/members/content//contentthumbs/xyz/abc.jpg";`
+    scripts = tree.xpath("//script[contains(text(), 'useimage')]/text()")
+    for script_content in scripts:
+        useimage_match = re.search(r'useimage\s*=\s*"(.*?)"', script_content)
+        if useimage_match:
+            # Image URLs that include `/members/` require a cookie to load, and we're just sending back a URL where the client might try to
+            # load without a cookie, so let's map to a public URL that seems to always exist
+            relative_image_url = useimage_match.group(1).strip().replace("/members/", "/tour/")
+            break
+
+    # When logged-out, image is available within the `fakeplayer`. Newer scenes use `src0_1x` and older scenes use `src`.
+    img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
+    if img_srcs:
+        relative_image_url = img_srcs[0].strip()
+
     base_hrefs = tree.xpath("//base/@href")
     if base_hrefs:
         base_url = base_hrefs[0].strip()
-        
-    img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
-    if img_srcs:
-        img_src = img_srcs[0].strip()
-        if base_url:
-            return urljoin(base_url, img_src)
-        return img_src
-    return ""
+    return urljoin(base_url, relative_image_url)
+
+
+def check_public_url_validity(public_url: str) -> bool:
+    """
+    Checks if the public URL returns a 200 status code.
+    """
+    log.debug(f"Checking if public URL is valid: {public_url}")
+    try:
+        # Check the public URL by making a HEAD request. We disallow redirects
+        # because a hypothetical public URL for a scene which is not publicly visible redirects (302) to the tour index page.
+        response = requests.head(public_url, allow_redirects=False, timeout=5)
+        if response.status_code == 200:
+            log.debug(f"Public URL is valid (200): {public_url}")
+            return True
+        else:
+            log.debug(f"Public URL is invalid (status {response.status_code}): {public_url}")
+            return False
+    except Exception as e:
+        log.warning(f"Error checking public URL {public_url}: {e}")
+        return False
 
 
 def scrape_scene_data(url: str) -> dict:
-    url = rewrite_members_url(url)
+    url = get_url_to_scrape(url)
     
     log.debug(f"Fetching scene URL: {url}")
     
@@ -173,7 +222,7 @@ def scrape_scene_data(url: str) -> dict:
         if cookie_name:
             cookies[cookie_name] = cookie_val
             cookies["warn"] = "true"
-            redacted = cookie_val[:2] + "..." + cookie_val[-2:] if len(cookie_val) >= 5 else "REDACTED"
+            redacted = cookie_val[:2] + "..." + cookie_val[-2:] if len(cookie_val) >= 12 else "REDACTED"
             log.debug(f"Using cookie authentication: '{cookie_name}' = '{redacted}'")
             
     try:
@@ -186,10 +235,27 @@ def scrape_scene_data(url: str) -> dict:
     tree = html.fromstring(response.content)
     scene = {}
 
+    # Extract URL early to check for public URL
+    canonical_links = tree.xpath("//link[@rel='canonical']/@href")
+    scene_url = canonical_links[0].strip() if canonical_links else url
+
+    # Determine and check presumed public URL
+    presumed_public_url = get_presumed_public_url(scene_url)
+    has_presumed_public = (scene_url != presumed_public_url)
+    public_url_is_valid = False
+
+    if has_presumed_public:
+        scene["presumed_public_url"] = presumed_public_url
+        public_url_is_valid = check_public_url_validity(presumed_public_url)
+        scene["public_url_is_valid"] = public_url_is_valid
+
     # Extract Title and Date
+    is_vip_scene = False
     title_text = get_title_text(tree)
     if title_text:
         scene["title"] = title_text
+        if re.search(r"\bVIP\b", title_text):
+            is_vip_scene = True
 
     date_str = get_release_date(tree, title_text)
     if date_str:
@@ -201,9 +267,11 @@ def scrape_scene_data(url: str) -> dict:
         scene["details"] = details
 
     # Extract Tags
-    tags = get_tags(tree)
-    if tags:
-        scene["tags"] = tags
+    scene["tags"] = get_tags(tree)
+    if is_vip_scene:
+        scene["tags"].append({"name": "Bonus Scenes"})
+    if has_presumed_public and not public_url_is_valid:
+        scene["tags"].append({"name": "Members Only"})
 
     # Extract Image URL
     image_url = get_image(tree, url)
@@ -228,12 +296,14 @@ def scrape_scene_data(url: str) -> dict:
         scene["studio"] = {"name": studio_name}
         log.debug(f"Mapped studio: {studio_name}")
 
-    # Extract URL
-    # XPath: //link[@rel='canonical']/@href
-    canonical_links = tree.xpath("//link[@rel='canonical']/@href")
-    scene_url = canonical_links[0].strip() if canonical_links else url
     scene["url"] = scene_url
     scene["urls"] = [scene_url]
+    if has_presumed_public:
+        if public_url_is_valid:
+            scene["urls"].append(presumed_public_url)
+        else:
+            wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
+            log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
 
     return scene
 
