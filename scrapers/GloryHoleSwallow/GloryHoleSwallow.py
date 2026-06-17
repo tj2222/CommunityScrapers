@@ -265,7 +265,7 @@ def scrape_scene_data(url: str) -> dict:
     title_text = get_title_text(tree)
     if title_text:
         scene["title"] = title_text
-        if re.search(r"\bVIP\b", title_text):
+        if re.search(r"\bVIP\d?\b", title_text): # e.g. `Title (VIP1)` or `Title (VIP 2)` or `Title (VIP)`
             is_vip_scene = True
 
     date_str = get_release_date(tree, title_text)
