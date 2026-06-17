@@ -55,11 +55,11 @@ def get_cookie_name(domain: str) -> str:
     if "gloryholeswallow" in domain:
         name = "GloryHoleSwallwo" # [sic]
     elif "cumpsters" in domain:
-        name = "Cumpsters"
+        name = "cumpsters"
     elif "spytug" in domain:
-        name = "SpyTug"
+        name = "spytug"
     elif "cumclinic" in domain:
-        name = "CumClinic"
+        name = "cumclinic"
     else:
         return ""
     
@@ -77,7 +77,11 @@ def get_presumed_public_url(url: str) -> str:
     match = re.search(r'/members/scenes/(.*)_vids\.html', url, re.IGNORECASE)
     if match:
         scene_id = match.group(1)
-        url = re.sub(r'/members/scenes/.*_vids\.html', f'/tour/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
+        # gloryholeswallow and cumclinic include `/tour` in their publc scene URL path; spytug and cumpsters do not.
+        if "gloryholeswallow" in url or "cumclinic" in url:
+            url = re.sub(r'/members/scenes/.*_vids\.html', f'/tour/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
+        else:
+            url = re.sub(r'/members/scenes/.*_vids\.html', f'/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
     return url
 
 def get_url_to_scrape(url: str) -> str:
@@ -171,18 +175,28 @@ def get_image(tree, base_url: str = "") -> str:
         if useimage_match:
             # Image URLs that include `/members/` require a cookie to load, and we're just sending back a URL where the client might try to
             # load without a cookie, so let's map to a public URL that seems to always exist
-            relative_image_url = useimage_match.group(1).strip().replace("/members/", "/tour/")
-            break
+            raw_url = useimage_match.group(1).strip()
+            if raw_url:
+                if "gloryholeswallow" in base_url or "cumclinic" in base_url:
+                    relative_image_url = raw_url.replace("/members/", "/tour/")
+                else:
+                    relative_image_url = raw_url.replace("/members/", "/")
+                log.info(f"Found relative image URL from useimage: {relative_image_url}")
+                break
 
     # When logged-out, image is available within the `fakeplayer`. Newer scenes use `src0_1x` and older scenes use `src`.
-    img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
-    if img_srcs:
-        relative_image_url = img_srcs[0].strip()
+    if not relative_image_url:
+        img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
+        if img_srcs:
+            relative_image_url = img_srcs[0].strip()
+            log.info(f"Found relative image URL from fakeplayer: {relative_image_url}")
 
-    base_hrefs = tree.xpath("//base/@href")
-    if base_hrefs:
-        base_url = base_hrefs[0].strip()
-    return urljoin(base_url, relative_image_url)
+    if relative_image_url:
+        base_hrefs = tree.xpath("//base/@href")
+        if base_hrefs:
+            base_url = base_hrefs[0].strip()
+        return urljoin(base_url, relative_image_url)
+    return None
 
 
 def check_public_url_validity(public_url: str) -> bool:
@@ -215,7 +229,6 @@ def scrape_scene_data(url: str) -> dict:
     cookie_val = get_pcar_cookie(domain)
     
     cookies = {}
-    log.debug(f"cookie_val: {cookie_val}")
     if cookie_val:
         cookie_name = get_cookie_name(domain)
         log.debug(f"cookie_name: {cookie_name}")
@@ -245,9 +258,7 @@ def scrape_scene_data(url: str) -> dict:
     public_url_is_valid = False
 
     if has_presumed_public:
-        scene["presumed_public_url"] = presumed_public_url
         public_url_is_valid = check_public_url_validity(presumed_public_url)
-        scene["public_url_is_valid"] = public_url_is_valid
 
     # Extract Title and Date
     is_vip_scene = False
