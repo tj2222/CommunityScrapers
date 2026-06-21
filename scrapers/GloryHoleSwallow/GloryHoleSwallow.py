@@ -2,6 +2,7 @@ import base64
 import json
 import re
 from datetime import datetime
+from os.path import basename, commonprefix
 from urllib.parse import urljoin, urlparse
 
 from py_common.deps import ensure_requirements
@@ -86,9 +87,6 @@ def get_presumed_public_url(url: str) -> str:
 
 def get_url_to_scrape(url: str) -> str:
     """Rewrite members scenes URL to public tour trailer URL if matched, unless we have cookies."""
-    # TODO: Check whether a public URL is available and add it to output if so. If not, include tag `Members Only`
-    # TODO: Use stem of download filenames as studio code
-
     presumed_public_url = get_presumed_public_url(url)
     if presumed_public_url == url:
         return url
@@ -218,6 +216,25 @@ def check_public_url_validity(public_url: str) -> bool:
         log.warning(f"Error checking public URL {public_url}: {e}")
         return False
 
+def get_download_filename_stem(tree):
+    # Only works on members' pages
+    # Get all links whose title attribute includes 'select save as to download'
+    download_links = tree.xpath("//a[contains(@title, 'select save as to download')]/@href")
+    if not download_links:
+        return ""
+    # Get the base file name from all download links
+    filename_stems = []
+    for link in download_links:
+        filename_stems.append(basename(urlparse(link).path))
+    if not filename_stems:
+        return ""
+    # Take the longest common prefix
+    common_prefix = commonprefix(filename_stems)
+    if common_prefix.endswith(".mp4"):
+        common_prefix = common_prefix[:-4]
+    if common_prefix.endswith("_"):
+        common_prefix = common_prefix[:-1]
+    return common_prefix
 
 def scrape_scene_data(url: str) -> dict:
     url = get_url_to_scrape(url)
@@ -315,6 +332,11 @@ def scrape_scene_data(url: str) -> dict:
         else:
             wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
             log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
+
+    filename_stem = get_download_filename_stem(tree)
+    if filename_stem:
+        scene["code"] = filename_stem
+        log.debug(f"Extracted filename stem: {filename_stem}")
 
     return scene
 
