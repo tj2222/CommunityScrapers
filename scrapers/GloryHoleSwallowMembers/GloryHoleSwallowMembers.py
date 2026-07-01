@@ -50,6 +50,7 @@ def get_pcar_cookie(domain: str) -> str:
                 val = parts[1].strip().strip("\"'")
     return val
 
+
 def get_cookie_name(domain: str) -> str:
     if "gloryholeswallow" in domain:
         name = "GloryHoleSwallwo" # [sic]
@@ -59,6 +60,7 @@ def get_cookie_name(domain: str) -> str:
     b64_name = base64.b64encode(name.encode('utf-8')).decode('utf-8')
     return f"pcar%5f{b64_name.replace('=', '%3d')}"
 
+
 def has_valid_cookie(url: str) -> bool:
     domain = urlparse(url).netloc.lower()
     cookie_val = get_pcar_cookie(domain)
@@ -66,23 +68,13 @@ def has_valid_cookie(url: str) -> bool:
         return True
     return False
 
+
 def get_presumed_public_url(url: str) -> str:
     match = re.search(r'/members/scenes/(.*)_vids\.html', url, re.IGNORECASE)
     if match:
         scene_id = match.group(1)
         url = re.sub(r'/members/scenes/.*_vids\.html', f'/tour/trailers/{scene_id}.html', url, flags=re.IGNORECASE)
     return url
-
-def get_url_to_scrape(url: str) -> str:
-    """Rewrite members scenes URL to public tour trailer URL if matched, unless we have cookies."""
-    presumed_public_url = get_presumed_public_url(url)
-    if presumed_public_url == url:
-        return url
-    if has_valid_cookie(url):
-        log.debug("Found member cookie for domain. Skipping rewrite.")
-        return url
-    else:
-        return presumed_public_url
 
 
 def get_title_text(tree) -> str:
@@ -99,6 +91,7 @@ def get_title_text(tree) -> str:
 
 
 def parse_date_string(date_text: str) -> str:
+    """Extract date from string like "March 1, 2026" -> "2026-03-01"""  
     if not date_text:
         return ""
     m = re.search(r'([A-Za-z]+)\.?\s*(\d{1,2}),\s*(\d{4})', date_text)
@@ -113,32 +106,21 @@ def parse_date_string(date_text: str) -> str:
     return ""
 
 
-def get_release_date(tree, title_text: str) -> tuple[str, bool]:
+def get_release_date(tree) -> tuple[str, bool]:
     """
-    Tries to extract the release date from the page or title text. If the page includes
+    Tries to extract the release date from the page. If the page includes
     a user comment with a date significantly earlier than the extracted scene release date,
     uses the comment date and returns the second element of the tuple as True.
 
     Returns:
-        tuple[str, bool]: First element is extracted date as it appears in the input,
-        or empty string if none found.
+        tuple[str, bool]: First element is extracted date in "YYYY-MM-DD" format, or "" if none found.
         Second element is True iff the release date is only an estimate as per the comment date logic.
     """
     release_date = ""
     earliest_comment_date = ""
     is_estimate = False
-    # 0. Try extracting earliest comment date, to use in part 3.
-    comment_date_divs = tree.xpath("//div[@class='comment' and not(@class='reply')]//div[@class='date']")
-    if comment_date_divs:
-        earliest_comment_date_div = comment_date_divs[-1]
-        date_str = parse_date_string(earliest_comment_date_div.text_content().strip())
-        if date_str:
-            log.debug(f"Found comment date: {date_str}")
-            earliest_comment_date = date_str
 
-
-
-    # 1. Try extracting explicit release date (i.e. on members pages)
+    # Try extracting explicit release date
     released_spans = tree.xpath("//div[@class='objectInfo']//p[contains(., 'Released')]/span")
     if released_spans:
         date_str = parse_date_string(released_spans[0].text_content().strip())
@@ -146,14 +128,18 @@ def get_release_date(tree, title_text: str) -> tuple[str, bool]:
             log.debug(f"Found explicit release date: {date_str}")
             release_date = date_str
 
-    # 2. Fallback to extracting from the title (i.e. logged-out pages)
-    if not release_date and title_text:
-        date_str = parse_date_string(title_text)
+
+    # Try extracting earliest comment date
+    comment_date_divs = tree.xpath("//div[@class='comment' and not(@class='reply')]//div[@class='date']")
+    if comment_date_divs:
+        earliest_comment_date_div = comment_date_divs[-1]
+        date_str = parse_date_string(earliest_comment_date_div.text_content().strip())
         if date_str:
-            log.debug(f"Extracted release date from title: {date_str}")
-            release_date = date_str
+            log.debug(f"Found comment date: {date_str}")
+            earliest_comment_date = date_str
     
-    # 3. Some scenes were reorganized and given new release dates but the comments still have their original date
+    # Some scenes were reorganized and given new release dates but the comments still have their original date.
+    # Check whether that seems to apply here (or we just don't have a release date but do have a comment date!) and update accordingly
     if earliest_comment_date:
         if not release_date:
             log.debug(f"No release date found, using comment date as estimated release date: {earliest_comment_date}")
@@ -203,28 +189,22 @@ def get_image(tree, base_url: str = "") -> str:
         useimage_match = re.search(r'useimage\s*=\s*"(.*?)"', script_content)
         if useimage_match:
             # Image URLs that include `/members/` require a cookie to load, and we're just sending back a URL where the client might try to
-            # load without a cookie, so let's map to a public URL that seems to always exist
+            # load without a cookie, so let's map to a public URL that should always work
             raw_url = useimage_match.group(1).strip()
             if raw_url:
                 if "gloryholeswallow" in base_url or "cumclinic" in base_url:
                     relative_image_url = raw_url.replace("/members/", "/tour/")
                 else:
                     relative_image_url = raw_url.replace("/members/", "/")
-                log.info(f"Found relative image URL from useimage: {relative_image_url}")
                 break
-
-    # When logged-out, image is available within the `fakeplayer`. Newer scenes use `src0_1x` and older scenes use `src`.
-    if not relative_image_url:
-        img_srcs = tree.xpath("//div[@id='fakeplayer']//img/@src0_1x") or tree.xpath("//div[@id='fakeplayer']//img/@src")
-        if img_srcs:
-            relative_image_url = img_srcs[0].strip()
-            log.info(f"Found relative image URL from fakeplayer: {relative_image_url}")
 
     if relative_image_url:
         base_hrefs = tree.xpath("//base/@href")
         if base_hrefs:
             base_url = base_hrefs[0].strip()
-        return urljoin(base_url, relative_image_url)
+        joined_url = urljoin(base_url, relative_image_url)
+        log.debug(f"Final image URL: {joined_url}")
+        return joined_url
     return None
 
 
@@ -248,7 +228,6 @@ def check_public_url_validity(public_url: str) -> bool:
         return False
 
 def get_download_filename_stem(tree):
-    # Only works on members' pages
     # Get all links whose title attribute includes 'select save as to download'
     download_links = tree.xpath("//a[contains(@title, 'select save as to download')]/@href")
     if not download_links:
@@ -259,33 +238,41 @@ def get_download_filename_stem(tree):
         filename_stems.append(basename(urlparse(link).path))
     if not filename_stems:
         return ""
-    # Take the longest common prefix
+    # Take the longest common prefix. Trim any trailing .mp4 extension or underscore (e.g. from "scene1_hd and scene1_sd")
     common_prefix = commonprefix(filename_stems)
     if common_prefix.endswith(".mp4"):
         common_prefix = common_prefix[:-4]
     if common_prefix.endswith("_"):
         common_prefix = common_prefix[:-1]
+    log.debug(f"Extracted filename stem: {common_prefix}")
     return common_prefix
 
 def scrape_scene_data(url: str) -> dict:
-    url = get_url_to_scrape(url)
-    
-    log.debug(f"Fetching scene URL: {url}")
+    log.debug(f"Scraping URL: {url}")
     
     domain = urlparse(url).netloc.lower()
-    # TODO: Only look up and use cookies if this is a members' URL
     cookie_val = get_pcar_cookie(domain)
+
+    if not cookie_val:
+        presumed_public_url = get_presumed_public_url(url)
+        if check_public_url_validity(presumed_public_url):
+            log.warning(f"No cookie found for URL {url} . Returning public URL for the user scrape: {presumed_public_url}")
+            return {"urls": [presumed_public_url]}
+        else:
+            log.warning(f"No cookie found for URL {url}. Unable to find working public URL. Returning Members Only tag.")
+            wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
+            log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
+            return {"tags": [{"name": "Members Only"}]}
     
     cookies = {}
-    if cookie_val:
-        cookie_name = get_cookie_name(domain)
-        log.debug(f"cookie_name: {cookie_name}")
-        if cookie_name:
-            cookies[cookie_name] = cookie_val
-            cookies["warn"] = "true"
-            redacted = cookie_val[:2] + "..." + cookie_val[-2:] if len(cookie_val) >= 12 else "REDACTED"
-            log.debug(f"Using cookie authentication: '{cookie_name}' = '{redacted}'")
-            
+    cookie_name = get_cookie_name(domain)
+    log.debug(f"cookie_name: {cookie_name}")
+    if cookie_name:
+        cookies[cookie_name] = cookie_val
+        cookies["warn"] = "true"
+        redacted = cookie_val[:2] + "..." + cookie_val[-2:] if len(cookie_val) >= 12 else "REDACTED"
+        log.debug(f"Using cookie authentication: '{cookie_name}' = '{redacted}'")
+
     try:
         response = requests.get(url, cookies=cookies, timeout=10)
         response.raise_for_status()
@@ -296,40 +283,37 @@ def scrape_scene_data(url: str) -> dict:
     tree = html.fromstring(response.content)
     scene = {}
 
-    # Extract URL early to check for public URL
+    # Extract canonical URL
     canonical_links = tree.xpath("//link[@rel='canonical']/@href")
     scene_url = canonical_links[0].strip() if canonical_links else url
 
-    # Determine and check presumed public URL
+    # Determine and check validity of presumed public URL
     presumed_public_url = get_presumed_public_url(scene_url)
-    has_presumed_public = (scene_url != presumed_public_url)
-    public_url_is_valid = False
+    public_url_is_valid = check_public_url_validity(presumed_public_url)
 
-    if has_presumed_public:
-        public_url_is_valid = check_public_url_validity(presumed_public_url)
-
-    # Extract Title and Date
+    # Title
     is_vip_scene = False
     title_text = get_title_text(tree)
     if title_text:
         scene["title"] = title_text
-        if re.search(r"\bVIP\d?\b", title_text): # e.g. `Title (VIP1)` or `Title (VIP 2)` or `Title (VIP)`
+        if re.search(r"\bVIP\d?\b", title_text): # e.g.s `Title (VIP1)`, `Title (VIP 2)`, `Title (VIP)`, or `Title VIP`
             is_vip_scene = True
 
-    date_str, release_date_is_estimate = get_release_date(tree, title_text)
+    # Release date
+    date_str, release_date_is_estimate = get_release_date(tree)
     if date_str:
         scene["date"] = date_str
 
-    # Extract Details
+    # Details AKA description
     details = get_details(tree)
     if details:
         scene["details"] = details
 
-    # Extract Tags
+    # Extract and add tags
     scene["tags"] = get_tags(tree)
     if is_vip_scene:
         scene["tags"].append({"name": "Bonus Scenes"})
-    if has_presumed_public and not public_url_is_valid:
+    if not public_url_is_valid:
         scene["tags"].append({"name": "Members Only"})
     if release_date_is_estimate:
         scene["tags"].append({"name": "Estimated Date"})
@@ -339,9 +323,7 @@ def scrape_scene_data(url: str) -> dict:
     image_url = get_image(tree, url)
     if image_url:
         scene["image"] = image_url
-        log.debug(f"Extracted image URL: {image_url}")
 
-    # Extract Studio
     # Map domain names to Studio names
     domain = urlparse(url).netloc.lower()
     studio_name = None
@@ -356,21 +338,18 @@ def scrape_scene_data(url: str) -> dict:
 
     if studio_name:
         scene["studio"] = {"name": studio_name}
-        log.debug(f"Mapped studio: {studio_name}")
+        log.debug(f"Mapped studio {studio_name} from domain {domain}")
 
-    scene["url"] = scene_url
     scene["urls"] = [scene_url]
-    if has_presumed_public:
-        if public_url_is_valid:
-            scene["urls"].append(presumed_public_url)
-        else:
-            wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
-            log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
+    if public_url_is_valid:
+        scene["urls"].append(presumed_public_url)
+    else:
+        wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
+        log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
 
     filename_stem = get_download_filename_stem(tree)
     if filename_stem:
         scene["code"] = filename_stem
-        log.debug(f"Extracted filename stem: {filename_stem}")
 
     return scene
 
