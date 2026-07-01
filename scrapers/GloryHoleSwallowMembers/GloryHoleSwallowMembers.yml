@@ -1,0 +1,11 @@
+name: GloryHoleSwallow
+# requires: py_common
+
+sceneByURL:
+  - action: script
+    url:
+      - gloryholeswallow.com/members
+    script:
+      - python
+      - GloryHoleSwallowMembers.py
+      - scene-by-url
