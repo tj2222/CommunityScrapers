@@ -1,7 +1,7 @@
 import base64
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from os.path import basename, commonprefix
 from urllib.parse import urljoin, urlparse
 
@@ -14,7 +14,14 @@ from py_common.proxy import StashRequests
 from py_common.util import scraper_args
 from py_common.config import get_config
 
+# TODO: Support additional related sites (cumpsters, spytug, cumclinic). Currently there
+# is some immediately useless parameterization in preparation for such support.
+
+# Requires logged-in member cookie to get actual metadata. If no cookie, scraper will just
+# return the logged-out URL if any exists, which can then be scraped by the non-members scraper.
+
 config = get_config(
+    # "PCAR" value can be set to 
     # NOTE: Need to use `<equal_sign>` rather than literal `=` in the example in the comment
     # because config parser prioritizes looking for `=` over looking for `#`
     default="""
@@ -42,7 +49,6 @@ def get_pcar_cookie(domain: str) -> str:
             if parts[0].strip().lower().startswith("pcar"):
                 val = parts[1].strip().strip("\"'")
     return val
-
 
 def get_cookie_name(domain: str) -> str:
     if "gloryholeswallow" in domain:
@@ -107,22 +113,65 @@ def parse_date_string(date_text: str) -> str:
     return ""
 
 
-def get_release_date(tree, title_text: str) -> str:
+def get_release_date(tree, title_text: str) -> tuple[str, bool]:
+    """
+    Tries to extract the release date from the page or title text. If the page includes
+    a user comment with a date significantly earlier than the extracted scene release date,
+    uses the comment date and returns the second element of the tuple as True.
+
+    Returns:
+        tuple[str, bool]: First element is extracted date as it appears in the input,
+        or empty string if none found.
+        Second element is True iff the release date is only an estimate as per the comment date logic.
+    """
+    release_date = ""
+    earliest_comment_date = ""
+    is_estimate = False
+    # 0. Try extracting earliest comment date, to use in part 3.
+    comment_date_divs = tree.xpath("//div[@class='comment' and not(@class='reply')]//div[@class='date']")
+    if comment_date_divs:
+        earliest_comment_date_div = comment_date_divs[-1]
+        date_str = parse_date_string(earliest_comment_date_div.text_content().strip())
+        if date_str:
+            log.debug(f"Found comment date: {date_str}")
+            earliest_comment_date = date_str
+
+
+
     # 1. Try extracting explicit release date (i.e. on members pages)
     released_spans = tree.xpath("//div[@class='objectInfo']//p[contains(., 'Released')]/span")
     if released_spans:
         date_str = parse_date_string(released_spans[0].text_content().strip())
         if date_str:
             log.debug(f"Found explicit release date: {date_str}")
-            return date_str
+            release_date = date_str
 
     # 2. Fallback to extracting from the title (i.e. logged-out pages)
-    if title_text:
+    if not release_date and title_text:
         date_str = parse_date_string(title_text)
         if date_str:
             log.debug(f"Extracted release date from title: {date_str}")
-            return date_str
-    return ""
+            release_date = date_str
+    
+    # 3. Some scenes were reorganized and given new release dates but the comments still have their original date
+    if earliest_comment_date:
+        if not release_date:
+            log.debug(f"No release date found, using comment date as estimated release date: {earliest_comment_date}")
+            release_date = earliest_comment_date
+            is_estimate = True
+        else:
+            try:
+                comment_dt = datetime.strptime(earliest_comment_date, "%Y-%m-%d")
+                release_dt = datetime.strptime(release_date, "%Y-%m-%d")
+                # Leave 4 day wiggle room for release schedule weirdness
+                if comment_dt < release_dt - timedelta(days=4):
+                    log.debug(f"Earliest comment date is significantly earlier than nominal release date. Using comment date as estimated release date: {earliest_comment_date}")
+                    release_date = earliest_comment_date
+                    is_estimate = True
+            except ValueError:
+                pass
+    
+    return (release_date, is_estimate)
 
 
 def get_details(tree) -> str:
@@ -267,7 +316,7 @@ def scrape_scene_data(url: str) -> dict:
         if re.search(r"\bVIP\d?\b", title_text): # e.g. `Title (VIP1)` or `Title (VIP 2)` or `Title (VIP)`
             is_vip_scene = True
 
-    date_str = get_release_date(tree, title_text)
+    date_str, release_date_is_estimate = get_release_date(tree, title_text)
     if date_str:
         scene["date"] = date_str
 
@@ -282,6 +331,9 @@ def scrape_scene_data(url: str) -> dict:
         scene["tags"].append({"name": "Bonus Scenes"})
     if has_presumed_public and not public_url_is_valid:
         scene["tags"].append({"name": "Members Only"})
+    if release_date_is_estimate:
+        scene["tags"].append({"name": "Estimated Date"})
+    
 
     # Extract Image URL
     image_url = get_image(tree, url)
