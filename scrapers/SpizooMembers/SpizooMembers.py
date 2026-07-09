@@ -14,13 +14,10 @@ from py_common.proxy import StashRequests
 from py_common.util import scraper_args
 from py_common.config import get_config
 
-# Scrapes from /members URLs on Spizoo network sites
+# Scrapes from /members and /expired URLs on Spizoo network sites
 # Benefits over logged-out scraping:
-# + Supports scenes that have no public URL.
-# + Can retrieve release dates for all scenes.
-# + Some scenes have "updated" release dates; tries to determine original release date from comment dates.
-# + Gets a studio code that is based on the download filenames.
-# + Gets higher res images in some cases.
+# + Scrapes tags from all sites. Some do not show tags on logged-out scene pages.
+# + Scrapes male performers, not visible on logged-out version of tagteampov.com (and perhaps other sites).
 
 config = get_config(
     # CONFIG_NOTES
@@ -38,7 +35,6 @@ config = get_config(
     MRLUCKYRAW_PCAR =
     MRLUCKYVIP_PCAR =
     RAWATTACK_PCAR =
-    REALSENSUAL_PCAR =
     SPIZOO_PCAR =
     TAGTEAMPOV_PCAR =
     VLOGXXX_PCAR =
@@ -73,7 +69,6 @@ def get_cookie_names(domain: str) -> list[str]:
         "mrluckyraw": ["mrluckyraw", "MrLuckyRaw", "Mr. LuckyRaw", "Mr. Lucky Raw"],
         "mrluckyvip": ["mrluckyvip", "MrLuckyVIP", "Mr. LuckyVIP", "Mr. Lucky VIP"],
         "rawattack": ["rawattack", "RawAttack", "Raw Attack"],
-        "realsensual": ["realsensual", "RealSensual", "Real Sensual"],
         "spizoo": ["spizoo", "Spizoo"],
         "tagteampov": ["tagteampov", "TagTeamPOV", "Tag Team POV"],
         "vlogxxx": ["vlogxxx", "VlogXXX", "Vlog XXX"]
@@ -128,8 +123,6 @@ def get_pcar_cookies_dict(domain: str) -> dict:
         key = "MRLUCKYVIP_PCAR"
     elif "rawattack" in domain:
         key = "RAWATTACK_PCAR"
-    elif "realsensual" in domain:
-        key = "REALSENSUAL_PCAR"
     elif "spizoo" in domain:
         key = "SPIZOO_PCAR"
     elif "tagteampov" in domain:
@@ -408,7 +401,6 @@ def get_studio(tree, url: str) -> dict:
         "mrluckyraw": "Mr. LuckyRaw",
         "mrluckyvip": "Mr. LuckyVIP",
         "rawattack": "RawAttack",
-        "realsensual": "Real Sensual",
         "spizoo": "Spizoo",
         "tagteampov": "Tag Team POV",
         "vlogxxx": "Vlog XXX"

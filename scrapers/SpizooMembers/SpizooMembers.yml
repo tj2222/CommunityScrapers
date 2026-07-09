@@ -5,19 +5,31 @@ sceneByURL:
   - action: script
     url:
       - creamher.com/members/
+      - creamher.com/expired/
       - drdaddypov.com/members/
+      - drdaddypov.com/expired/
       - firstclasspov.com/members/
+      - firstclasspov.com/expired/
       - gothgirlfriends.com/members/
+      - gothgirlfriends.com/expired/
       - gothgirlfriendsvip.com/members/
+      - gothgirlfriendsvip.com/expired/
       - mrluckylife.com/members/
+      - mrluckylife.com/expired/
       - mrluckypov.com/members/
+      - mrluckypov.com/expired/
       - mrluckyraw.com/members/
+      - mrluckyraw.com/expired/
       - mrluckyvip.com/members/
+      - mrluckyvip.com/expired/
       - rawattack.com/members/
-      - realsensual.com/members/
+      - rawattack.com/expired/
       - spizoo.com/members/
+      - spizoo.com/expired/
       - tagteampov.com/members/
+      - tagteampov.com/expired/
       - vlogxxx.com/members/
+      - vlogxxx.com/expired/
     script:
       - python
       - SpizooMembers.py
