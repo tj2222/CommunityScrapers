@@ -1,0 +1,31 @@
+name: SpizooMembers
+# requires: py_common
+
+sceneByURL:
+  - action: script
+    url:
+      - creamher.com/members/
+      - drdaddypov.com/members/
+      - firstclasspov.com/members/
+      - gothgirlfriends.com/members/
+      - gothgirlfriendsvip.com/members/
+      - mrluckylife.com/members/
+      - mrluckypov.com/members/
+      - mrluckyraw.com/members/
+      - mrluckyvip.com/members/
+      - rawattack.com/members/
+      - realsensual.com/members/
+      - spizoo.com/members/
+      - tagteampov.com/members/
+      - vlogxxx.com/members/
+    script:
+      - python
+      - SpizooMembers.py
+      - scene-by-url
+
+sceneByQueryFragment:
+  action: script
+  script:
+    - python
+    - SpizooMembers.py
+    - scene-by-query-fragment
