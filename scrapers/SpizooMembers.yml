@@ -2,20 +2,7 @@ name: Spizoo
 sceneByURL:
   - action: scrapeXPath
     url:
-      - creamher.com/updates/
-      - drdaddypov.com/updates/
-      - firstclasspov.com/updates/
-      - gothgirlfriends.com/updates/
-      - gothgirlfriendsvip.com/updates
-      - mrluckylife.com/updates/
-      - mrluckypov.com/updates/
-      - mrluckyraw.com/updates/
-      - mrluckyvip.com/updates/
-      - rawattack.com/updates/
-      - realsensual.com/updates/
-      - spizoo.com/updates/
-      - tagteampov.com/updates/
-      - vlogxxx.com/updates/
+      - mrluckylife.com/members/
     scraper: sceneScraper
 sceneByName:
   action: scrapeXPath
@@ -88,4 +75,13 @@ xPathScrapers:
               # Remove any resizing parameters for the image, we want the original
               - regex: "[?&]img(?:q|w|h)=[^&]+"
                 with:
-# Last Updated July 9, 2026
+driver:
+  cookies:
+    - CookieURL: "https://www.mrluckylife.com/"
+      Cookies:
+        # Set this cookie name to the one beginning with `pcar[...]` to scrape the members' pages.
+        - Name: ""
+          Domain: ".mrluckylife.com"
+          Path: "/"
+          Value: ""
+# Last Updated July 4, 2026
