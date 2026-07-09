@@ -1,4 +1,3 @@
-import base64
 import json
 import re
 from datetime import datetime, timedelta
@@ -18,12 +17,16 @@ from py_common.config import get_config
 # Benefits over logged-out scraping:
 # + Scrapes tags from all sites. Some do not show tags on logged-out scene pages.
 # + Scrapes male performers, not visible on logged-out version of tagteampov.com (and perhaps other sites).
+# + Scrapes scenes that are no longer visible to logged-out users.
+
+
+
 
 config = get_config(
     # CONFIG_NOTES
     # Set your member auth cookies (pcar...) here for each site to scrape member content.
     # Can be the full cookie (name=value) or just the cookie value itself.
-    # e.g., CREAMHER_PCAR = pcar%5fY3JlYW1oZXI%3d=value
+    # e.g., CREAMHER_PCAR = pcar%5fTWVtYmVycyBBcmVh=RW..0K or CREAMHER_PCAR = RW...0K
     default="""
     CREAMHER_PCAR =
     DRDADDYPOV_PCAR =
@@ -45,94 +48,19 @@ requests = StashRequests()
 
 
 def get_site_name(domain: str) -> str:
-    # e.g., mrluckylife.com -> mrluckylife
+    # e.g., www.mrluckylife.com -> mrluckylife
     domain = domain.lower()
     if domain.startswith("www."):
         domain = domain[4:]
-    if domain.endswith(".com"):
-        domain = domain[:-4]
-    return domain
-
-
-def get_cookie_names(domain: str) -> list[str]:
-    site = get_site_name(domain)
-    
-    # Compile a list of casing candidates for each site based on known mappings
-    casing_map = {
-        "creamher": ["creamher", "CreamHer", "Cream Her"],
-        "drdaddypov": ["drdaddypov", "DrDaddyPOV", "Dr. Daddy POV", "Dr Daddy POV"],
-        "firstclasspov": ["firstclasspov", "FirstClassPOV", "First Class POV"],
-        "gothgirlfriendsvip": ["gothgirlfriendsvip", "GothGirlfriendsVIP", "Goth GirlfriendsVIP"],
-        "gothgirlfriends": ["gothgirlfriends", "GothGirlfriends", "Goth Girlfriends"],
-        "mrluckylife": ["mrluckylife", "MrLuckyLife", "MrLuckyLIFE", "Mr. LuckyLIFE", "Mr. Lucky Life"],
-        "mrluckypov": ["mrluckypov", "MrLuckyPOV", "Mr. LuckyPOV", "Mr. Lucky POV"],
-        "mrluckyraw": ["mrluckyraw", "MrLuckyRaw", "Mr. LuckyRaw", "Mr. Lucky Raw"],
-        "mrluckyvip": ["mrluckyvip", "MrLuckyVIP", "Mr. LuckyVIP", "Mr. Lucky VIP"],
-        "rawattack": ["rawattack", "RawAttack", "Raw Attack"],
-        "spizoo": ["spizoo", "Spizoo"],
-        "tagteampov": ["tagteampov", "TagTeamPOV", "Tag Team POV"],
-        "vlogxxx": ["vlogxxx", "VlogXXX", "Vlog XXX"]
-    }
-    
-    candidates = []
-    if site in casing_map:
-        candidates.extend(casing_map[site])
-    else:
-        candidates.append(site)
-        candidates.append(site.capitalize())
-        
-    extra_candidates = []
-    for c in candidates:
-        extra_candidates.append(c.lower())
-        extra_candidates.append(c.upper())
-        if " " in c:
-            extra_candidates.append(c.replace(" ", ""))
-            
-    all_names = list(dict.fromkeys(candidates + extra_candidates))
-    cookie_names = []
-    for name in all_names:
-        b64_name = base64.b64encode(name.encode('utf-8')).decode('utf-8')
-        cookie_names.append(f"pcar%5f{b64_name.replace('=', '%3d')}")
-        cookie_names.append(f"pcar_{b64_name.replace('=', '%3d')}")
-        cookie_names.append(f"pcar_{b64_name}")
-        cookie_names.append(f"pcar%5f{b64_name}")
-        
-    return list(dict.fromkeys(cookie_names))
+    parts = domain.split(".")
+    return parts[-2] if len(parts) >= 2 else parts[0]
 
 
 def get_pcar_cookies_dict(domain: str) -> dict:
-    val = ""
-    key = None
-    if "creamher" in domain:
-        key = "CREAMHER_PCAR"
-    elif "drdaddypov" in domain:
-        key = "DRDADDYPOV_PCAR"
-    elif "firstclasspov" in domain:
-        key = "FIRSTCLASSPOV_PCAR"
-    elif "gothgirlfriendsvip" in domain:
-        key = "GOTHGIRLFRIENDSVIP_PCAR"
-    elif "gothgirlfriends" in domain:
-        key = "GOTHGIRLFRIENDS_PCAR"
-    elif "mrluckylife" in domain:
-        key = "MRLUCKYLIFE_PCAR"
-    elif "mrluckypov" in domain:
-        key = "MRLUCKYPOV_PCAR"
-    elif "mrluckyraw" in domain:
-        key = "MRLUCKYRAW_PCAR"
-    elif "mrluckyvip" in domain:
-        key = "MRLUCKYVIP_PCAR"
-    elif "rawattack" in domain:
-        key = "RAWATTACK_PCAR"
-    elif "spizoo" in domain:
-        key = "SPIZOO_PCAR"
-    elif "tagteampov" in domain:
-        key = "TAGTEAMPOV_PCAR"
-    elif "vlogxxx" in domain:
-        key = "VLOGXXX_PCAR"
+    site_key = get_site_name(domain).upper()
+    key = f"{site_key}_PCAR"
 
-    if key and key in config:
-        val = config[key]
-
+    val = config.get(key, "")
     if not val:
         return {}
 
@@ -144,10 +72,7 @@ def get_pcar_cookies_dict(domain: str) -> dict:
             cookies[parts[0].strip()] = parts[1].strip().strip("\"'")
             return cookies
 
-    # If the user only gave the value, send all candidate cookie names
-    cookie_names = get_cookie_names(domain)
-    for name in cookie_names:
-        cookies[name] = val
+    cookies["pcar%5fTWVtYmVycyBBcmVh"] = val
     return cookies
 
 
