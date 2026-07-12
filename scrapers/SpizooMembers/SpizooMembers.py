@@ -1,6 +1,6 @@
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from os.path import basename, commonprefix
 from urllib.parse import urljoin, urlparse
 
@@ -27,20 +27,35 @@ config = get_config(
     # Set your member auth cookies (pcar...) here for each site to scrape member content.
     # Can be the full cookie (name=value) or just the cookie value itself.
     # e.g., CREAMHER_PCAR = pcar%5fTWVtYmVycyBBcmVh=RW..0K or CREAMHER_PCAR = RW...0K
+    # Set SITEXYZ_IS_EXPIRED = true if your cookie for that site is for an expired membership.
     default="""
+    # See CONFIG_NOTES in SpizooMembers.py for documentation
     CREAMHER_PCAR =
+    CREAMHER_IS_EXPIRED =
     DRDADDYPOV_PCAR =
+    DRDADDYPOV_IS_EXPIRED =
     FIRSTCLASSPOV_PCAR =
+    FIRSTCLASSPOV_IS_EXPIRED =
     GOTHGIRLFRIENDS_PCAR =
+    GOTHGIRLFRIENDS_IS_EXPIRED =
     GOTHGIRLFRIENDSVIP_PCAR =
+    GOTHGIRLFRIENDSVIP_IS_EXPIRED =
     MRLUCKYLIFE_PCAR =
+    MRLUCKYLIFE_IS_EXPIRED =
     MRLUCKYPOV_PCAR =
+    MRLUCKYPOV_IS_EXPIRED =
     MRLUCKYRAW_PCAR =
+    MRLUCKYRAW_IS_EXPIRED =
     MRLUCKYVIP_PCAR =
+    MRLUCKYVIP_IS_EXPIRED =
     RAWATTACK_PCAR =
+    RAWATTACK_IS_EXPIRED =
     SPIZOO_PCAR =
+    SPIZOO_IS_EXPIRED =
     TAGTEAMPOV_PCAR =
+    TAGTEAMPOV_IS_EXPIRED =
     VLOGXXX_PCAR =
+    VLOGXXX_IS_EXPIRED =
 """
 )
 
@@ -48,7 +63,14 @@ requests = StashRequests()
 
 
 def get_site_name(domain: str) -> str:
-    # e.g., www.mrluckylife.com -> mrluckylife
+    """Extracts the base site/studio name from a domain.
+
+    Args:
+        domain: The domain string (e.g., 'www.creamher.com' or 'members.spizoo.com').
+
+    Returns:
+        The base site name (e.g., 'creamher' or 'spizoo').
+    """
     domain = domain.lower()
     if domain.startswith("www."):
         domain = domain[4:]
@@ -57,10 +79,18 @@ def get_site_name(domain: str) -> str:
 
 
 def get_pcar_cookies_dict(domain: str) -> dict:
+    """Retrieves and prepares the PCAR session cookie dictionary for a domain.
+
+    Args:
+        domain: The site domain.
+
+    Returns:
+        A dictionary with the PCAR cookie key and value, or an empty dict if not configured.
+    """
     site_key = get_site_name(domain).upper()
     key = f"{site_key}_PCAR"
 
-    val = config.get(key, "")
+    val = config[key]
     if not val:
         return {}
 
@@ -76,16 +106,84 @@ def get_pcar_cookies_dict(domain: str) -> dict:
     return cookies
 
 
+def is_site_expired(domain: str) -> bool:
+    """Checks if the membership for the given domain is expired based on config.
+
+    Args:
+        domain: The site domain.
+
+    Returns:
+        True if the membership is configured as expired, False otherwise.
+    """
+    site_key = get_site_name(domain).upper()
+    key = f"{site_key}_IS_EXPIRED"
+    try:
+        val = config[key]
+    except KeyError:
+        return False
+
+    if not val:
+        return False
+
+    val_str = str(val).strip().lower()
+    return val_str in ("1", "true")
+
+
+def get_url_for_scraping(url: str, expired: bool) -> str:
+    """Rewrites the URL path to convert it to the expected scraping URL path.
+
+    If a public/updates URL is input, it converts it to the members or expired scene URL based on `expired`.
+    Otherwise, it replaces /members/scenes/ with /expired/scenes/ (or vice versa) to match the `expired` state.
+
+    Args:
+        url: The scene URL.
+        expired: Whether the site uses /expired/ instead of /members/.
+
+    Returns:
+        The normalized URL for scraping.
+    """
+    if re.search(r'/updates/', url, re.IGNORECASE):
+        path = 'expired' if expired else 'members'
+        return re.sub(
+            r'/updates/(.*?)\.html',
+            rf'/{path}/scenes/\1_vids.html',
+            url,
+            flags=re.IGNORECASE
+        )
+
+    if expired:
+        return re.sub(r'/members/scenes/', '/expired/scenes/', url, flags=re.IGNORECASE)
+    else:
+        return re.sub(r'/expired/scenes/', '/members/scenes/', url, flags=re.IGNORECASE)
+
+
 def get_presumed_public_url(url: str) -> str:
-    # Match either _vids.html or just .html under /members/scenes/
-    match = re.search(r'/members/scenes/(.*?)(?:_vids)?\.html', url, re.IGNORECASE)
-    if match:
-        scene_id = match.group(1)
-        url = re.sub(r'/members/scenes/.*\.html', f'/updates/{scene_id}.html', url, flags=re.IGNORECASE)
-    return url
+    """Derives the expected public scene URL from a logged-in members URL.
+
+    Args:
+        url: The logged-in member scene URL.
+
+    Returns:
+        The public scene URL.
+    """
+    # Replace members/expired scene path with public updates path using backreference for scene ID
+    return re.sub(
+        r'/(?:members|expired)/scenes/(.*?)_vids\.html',
+        r'/updates/\1.html',
+        url,
+        flags=re.IGNORECASE
+    )
 
 
 def check_public_url_validity(public_url: str) -> bool:
+    """Checks if the derived public scene URL actually exists (returns HTTP 200).
+
+    Args:
+        public_url: The public scene URL to check.
+
+    Returns:
+        True if valid, False otherwise.
+    """
     try:
         response = requests.head(public_url, allow_redirects=False, timeout=5)
         if response.status_code == 200:
@@ -99,209 +197,159 @@ def check_public_url_validity(public_url: str) -> bool:
         return False
 
 
-def get_title_text(tree) -> str:
-    xpath_exprs = [
-        "//div[@class='title' or @class='row']//h1",
-        "//div[@class='title-trailer']//h2",
-        "//h2[contains(@class, 'titular')]",
-        "//div[@class='objectInfo']/h1",
-        "//title"
-    ]
-    for expr in xpath_exprs:
-        elements = tree.xpath(expr)
-        if elements:
-            title_text = elements[0].text_content().strip()
-            if title_text:
-                title_text = re.sub(r'^Tour\s\-\s*', '', title_text, flags=re.IGNORECASE)
-                title_text = re.sub(r'\s\-\s*$', '', title_text, flags=re.IGNORECASE)
-                return title_text.strip()
-    return ""
-
-
-def parse_date_string(date_text: str) -> str:
-    """Extract date from string like "2026-07-04" or "March 1, 2026" or similar."""
-    if not date_text:
-        return ""
-    m_ymd = re.search(r'(\d{4})-(\d{2})-(\d{2})', date_text)
-    if m_ymd:
-        return m_ymd.group(0)
-        
-    m = re.search(r'([A-Za-z]+)\.?\s*(\d{1,2}),\s*(\d{4})', date_text)
-    if m:
-        month_str, day_str, year_str = m.groups()
-        month_str = month_str[:3].title()
-        try:
-            dt = datetime.strptime(f"{month_str} {day_str} {year_str}", "%b %d %Y")
-            return dt.strftime("%Y-%m-%d")
-        except ValueError:
-            pass
-    return ""
-
-
-def get_release_date(tree) -> tuple[str, bool]:
-    release_date = ""
-    earliest_comment_date = ""
-    is_estimate = False
-
-    # Spizoo members date selector
-    xpath_expr = (
-        "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-        "//p[@class='date']"
-    )
+def get_scene_title(tree) -> str:
+    title_text = ""
+    xpath_expr = "//a[@data-scene]/@data-scene"
     elements = tree.xpath(xpath_expr)
-    if not elements:
-        elements = tree.xpath("//div[@class='objectInfo']//p[contains(., 'Released')]/span")
-        
     if elements:
-        date_str = parse_date_string(elements[0].text_content().strip())
-        if date_str:
-            log.debug(f"Found explicit release date: {date_str}")
-            release_date = date_str
+        title_text = elements[0].strip()
+        log.debug(f"Found title in data-scene attribute: {title_text}")
+    if not title_text:
+        title_text = tree.xpath("//title")[0].text_content().strip()
+        log.debug(f"Found title in title tag: {title_text}")
+    return title_text
 
-    # Extract earliest comment date
-    comment_date_divs = tree.xpath("//div[@class='comment' and not(@class='reply')]//div[@class='date']")
-    if comment_date_divs:
-        earliest_comment_date_div = comment_date_divs[-1]
-        date_str = parse_date_string(earliest_comment_date_div.text_content().strip())
-        if date_str:
-            log.debug(f"Found comment date: {date_str}")
-            earliest_comment_date = date_str
-    
-    if earliest_comment_date:
-        if not release_date:
-            log.info(f"No release date found, using comment date as estimated release date: {earliest_comment_date}")
-            release_date = earliest_comment_date
-            is_estimate = True
-        else:
+
+def get_release_date(tree) -> str:
+    """Extracts the release date from the parsed HTML tree.
+
+    Args:
+        tree: The lxml HTML tree.
+
+    Returns:
+        The ISO release date string.
+    """
+    release_date = ""
+
+    # Note that the raw string may include content such as "Release date:"
+    # Only date formats seen so far: MM/DD/YYYY and YYYY-MM-DD
+    xpath_expr = "//p[@class='date']"
+    elements = tree.xpath(xpath_expr)
+
+    if elements:
+        raw_date_str = elements[0].text_content().strip()
+        log.debug(f"Found raw date string: {raw_date_str}")
+        slash_format = re.search(r"\d{2}/\d{2}/\d{4}", raw_date_str)
+        if slash_format:
             try:
-                comment_dt = datetime.strptime(earliest_comment_date, "%Y-%m-%d")
-                release_dt = datetime.strptime(release_date, "%Y-%m-%d")
-                if comment_dt < release_dt - timedelta(days=4):
-                    log.info(f"Earliest comment date is significantly earlier than nominal release date. Using comment date as estimated release date: {earliest_comment_date}")
-                    release_date = earliest_comment_date
-                    is_estimate = True
+                dt = datetime.strptime(slash_format.group(0), "%m/%d/%Y")
+                release_date = dt.strftime("%Y-%m-%d")
             except ValueError:
-                pass
-    
-    return (release_date, is_estimate)
+                log.error(f"Failed to parse date: {raw_date_str}")
+        else:
+            dash_format = re.search(r"\d{4}-\d{2}-\d{2}", raw_date_str)
+            if dash_format:
+                try:
+                    dt = datetime.strptime(dash_format.group(0), "%Y-%m-%d")
+                    release_date = dt.strftime("%Y-%m-%d")
+                except ValueError:
+                    log.error(f"Failed to parse date: {raw_date_str}")
+    if release_date:
+        log.debug(f"Parsed release date: {release_date}")
+    return release_date
 
 
 def get_details(tree) -> str:
-    xpath_desc = (
-        "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-        "//p[@class='description']"
-    )
-    paragraphs = tree.xpath(xpath_desc)
-    if not paragraphs:
-        xpath_all_p = (
-            "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-            "//p"
-        )
-        paragraphs = tree.xpath(xpath_all_p)
-    if not paragraphs:
-        paragraphs = tree.xpath("//div[@class='objectInfo']/div[@class='content']/p")
-        
-    if paragraphs:
-        details_parts = [p.text_content().strip() for p in paragraphs if p.text_content().strip()]
-        filtered_parts = []
-        for part in details_parts:
-            if part.startswith("Released:") or part.startswith("Tags:") or part.startswith("Models:") or part.startswith("Performers:"):
-                continue
-            if len(part) < 30 and parse_date_string(part):
-                continue
-            filtered_parts.append(part)
-        if filtered_parts:
-            return "\n\n".join(filtered_parts)
-    return ""
+    """Extracts and cleans the scene description/details from the parsed HTML tree.
+
+    Args:
+        tree: The lxml HTML tree.
+
+    Returns:
+        The details text.
+    """
+    details = ""
+    xpath_expr = "//p[@class='description']"
+    elements = tree.xpath(xpath_expr)
+    if elements:
+        details = elements[0].text_content().strip()
+    if details:
+        log.debug(f"Found details: {details}")
+    else:
+        log.debug("No details found")
+    return details
 
 
 def get_performers(tree) -> list:
-    xpath_expr = (
-        "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-        "//a[@class='model-name']/@title | "
-        "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-        "//a[contains(@href,'/model')]/@title"
-    )
+    """Extracts the performers of the scene from the parsed HTML tree.
+
+    Args:
+        tree: The lxml HTML tree.
+
+    Returns:
+        A list of performer dictionaries containing performer name.
+    """
+    xpath_expr = "//a[@class='model-name']/@title"
     perf_titles = tree.xpath(xpath_expr)
-    
-    if not perf_titles:
-        xpath_links = (
-            "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-            "//a[@class='model-name'] | "
-            "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-            "//a[contains(@href,'/model')]"
-        )
-        links = tree.xpath(xpath_links)
-        perf_titles = [link.text_content().strip() for link in links if link.text_content().strip()]
-        
     performers = []
+    # Performer list is sometimes repeated on the same page.
     seen = set()
-    for p in perf_titles:
-        name = p.strip()
+    for title in perf_titles:
+        name = title.strip()
         if name and name.lower() not in seen:
             seen.add(name.lower())
             performers.append({"name": name})
+    if performers:
+        log.debug(f"Found performers: {performers}")
+    else:
+        log.warning("No performers found")
     return performers
 
 
 def get_tags(tree) -> list:
-    xpath_expr = (
-        "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-        "//a[contains(@href,'/categories')] | "
-        "(//section[@id='trailer-data' or @id='sceneInfo' or @id='scene-info' or @id='des-scene'])"
-        "//a[contains(@href,'/category')] | "
-        "//div[contains(@class, 'categories-holder')]/a"
-    )
-    tag_links = tree.xpath(xpath_expr)
-    
-    if not tag_links:
-        tag_links = tree.xpath("//div[@class='objectInfo']//p[contains(text(),'Tags')]//a")
-        
+    """Extracts the tags/categories of the scene from the parsed HTML tree.
+
+    Args:
+        tree: The lxml HTML tree.
+
+    Returns:
+        A list of tag dictionaries containing tag name.
+    """
+    xpath_expr = "//a[contains(@href,'/categories')]//@title"
+    tag_titles = tree.xpath(xpath_expr)
     tags = []
+    # Tag list is sometimes repeated on the same page
     seen = set()
-    for link in tag_links:
-        name = link.text_content().strip()
-        if not name and hasattr(link, 'attrib') and 'title' in link.attrib:
-            name = link.attrib['title'].strip()
+    for title in tag_titles:
+        name = title.strip()
         if name and name.lower() not in seen:
             seen.add(name.lower())
             tags.append({"name": name})
+    if tags:
+        log.debug(f"Found tags: {tags}")
+    else:
+        log.warning("No tags found")
     return tags
 
 
-def get_image(tree, base_url: str = "") -> str:
-    xpath_expr = (
-        "(//section[@id='trailer-video' or @id='scene' or @id='scene-video'] | //div[contains(@class, 'videoHolder')])"
-        "//video/@poster | "
-        "//img[contains(@class, 'update_thumb') or contains(@class, 'trailer-thumb')]/@src"
-    )
-    images = tree.xpath(xpath_expr)
-    
-    if not images:
-        scripts = tree.xpath("//script[contains(text(), 'useimage')]/text()")
-        for script_content in scripts:
-            useimage_match = re.search(r'useimage\s*=\s*"(.*?)"', script_content)
-            if useimage_match:
-                raw_url = useimage_match.group(1).strip()
-                if raw_url:
-                    relative_url = raw_url.replace("/members/", "/")
-                    images = [relative_url]
-                    break
+def get_image(tree) -> str:
+    """Extracts the poster or preview image URL from the parsed HTML tree.
 
+    Args:
+        tree: The lxml HTML tree.
+
+    Returns:
+        The absolute image URL, or None.
+    """
+    xpath_expr = "//video/@poster"
+    images = tree.xpath(xpath_expr)
     if images:
         img_url = images[0].strip()
         img_url = re.sub(r"[?&]img(?:q|w|h)=[^&]+", "", img_url)
-        
-        base_hrefs = tree.xpath("//base/@href")
-        if base_hrefs:
-            base_url = base_hrefs[0].strip()
-        joined_url = urljoin(base_url, img_url)
-        log.debug(f"Final image URL: {joined_url}")
-        return joined_url
+        return img_url
     return None
 
 
 def get_studio(tree, url: str) -> dict:
+    """Determines the studio name from the parsed HTML tree and page URL.
+
+    Args:
+        tree: The lxml HTML tree.
+        url: The page URL.
+
+    Returns:
+        A dictionary containing the studio name.
+    """
     site_el = tree.xpath("//i[@id='site']/@value")
     site_val = site_el[0].strip() if site_el else ""
     
@@ -335,53 +383,33 @@ def get_studio(tree, url: str) -> dict:
     return {"name": studio_name}
 
 
-def get_download_filename_stem(tree) -> str:
-    download_links = tree.xpath(
-        "//a[contains(@title, 'select save as to download')]/@href | "
-        "//a[contains(@href, '/download/')]/@href | "
-        "//a[contains(@class, 'download')]/@href"
-    )
-    if not download_links:
-        return ""
-    filename_stems = []
-    for link in download_links:
-        path = urlparse(link).path
-        filename = basename(path)
-        if filename:
-            filename_stems.append(filename)
-            
-    if not filename_stems:
-        return ""
-    common_prefix = commonprefix(filename_stems)
-    if not common_prefix:
-        common_prefix = filename_stems[0]
-        
-    if common_prefix.endswith(".mp4"):
-        common_prefix = common_prefix[:-4]
-    if common_prefix.endswith("_"):
-        common_prefix = common_prefix[:-1]
-    
-    common_prefix = re.sub(r'_(?:hd|sd|mobile|1080p|720p|4k|480p)$', '', common_prefix, flags=re.IGNORECASE)
-    log.debug(f"Extracted filename stem: {common_prefix}")
-    return common_prefix
-
-
 def scrape_scene_data(url: str) -> dict:
+    """Scrapes metadata for a given member scene URL.
+
+    Args:
+        url: The scene URL.
+
+    Returns:
+        A dictionary of scraped scene metadata.
+    """
+    domain = urlparse(url).netloc.lower()
+    expired = is_site_expired(domain)
+    url = get_url_for_scraping(url, expired)
+
     log.debug(f"Scraping URL: {url}")
     
-    domain = urlparse(url).netloc.lower()
     cookies = get_pcar_cookies_dict(domain)
 
-    if not cookies:
-        presumed_public_url = get_presumed_public_url(url)
-        if check_public_url_validity(presumed_public_url):
-            log.warning(f"No cookie found for URL {url} . Returning public URL for the user scrape: {presumed_public_url}")
-            return {"urls": [presumed_public_url]}
-        else:
-            log.warning(f"No cookie found for URL {url}. Unable to find working public URL. Returning Members Only tag.")
-            wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
-            log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
-            return {"tags": [{"name": "Members Only"}]}
+    # if not cookies:
+    #     presumed_public_url = get_presumed_public_url(url)
+    #     if check_public_url_validity(presumed_public_url):
+    #         log.warning(f"No cookie found for URL {url} . Returning public URL for the user scrape: {presumed_public_url}")
+    #         return {"urls": [presumed_public_url]}
+    #     else:
+    #         log.warning(f"No cookie found for URL {url}. Unable to find working public URL. Returning Members Only tag.")
+    #         wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
+    #         log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
+    #         return {"tags": [{"name": "Members Only"}]}
     
     cookies["warn"] = "true"
     log.debug(f"Using cookie authentication (sending {len(cookies) - 1} candidates)")
@@ -398,18 +426,19 @@ def scrape_scene_data(url: str) -> dict:
 
     canonical_links = tree.xpath("//link[@rel='canonical']/@href")
     scene_url = canonical_links[0].strip() if canonical_links else url
+    scene_url = re.sub(r'/expired/scenes/', '/members/scenes/', scene_url, flags=re.IGNORECASE)
 
     presumed_public_url = get_presumed_public_url(scene_url)
     public_url_is_valid = check_public_url_validity(presumed_public_url)
 
     is_vip_scene = False
-    title_text = get_title_text(tree)
+    title_text = get_scene_title(tree)
     if title_text:
         scene["title"] = title_text
         if re.search(r"\bVIP\d?\b", title_text):
             is_vip_scene = True
 
-    date_str, release_date_is_estimate = get_release_date(tree)
+    date_str = get_release_date(tree)
     if date_str:
         scene["date"] = date_str
 
@@ -426,10 +455,10 @@ def scrape_scene_data(url: str) -> dict:
         scene["tags"].append({"name": "Bonus Scenes"})
     if not public_url_is_valid:
         scene["tags"].append({"name": "Members Only"})
-    if release_date_is_estimate:
-        scene["tags"].append({"name": "Estimated Date"})
+    if expired:
+        scene["tags"].append({"name": "Scraped with expired membership"})
 
-    image_url = get_image(tree, url)
+    image_url = get_image(tree)
     if image_url:
         scene["image"] = image_url
 
@@ -441,10 +470,6 @@ def scrape_scene_data(url: str) -> dict:
     else:
         wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
         log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
-
-    filename_stem = get_download_filename_stem(tree)
-    if filename_stem:
-        scene["code"] = filename_stem
 
     return scene
 
