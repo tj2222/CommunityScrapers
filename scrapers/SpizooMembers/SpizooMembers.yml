@@ -30,6 +30,21 @@ sceneByURL:
       - tagteampov.com/expired/
       - vlogxxx.com/members/
       - vlogxxx.com/expired/
+      # Uncomment these if you want to use this for public URLs too.
+      # - creamher.com/updates/
+      # - drdaddypov.com/updates/
+      # - firstclasspov.com/updates/
+      # - gothgirlfriends.com/updates/
+      # - gothgirlfriendsvip.com/updates
+      - mrluckylife.com/updates/
+      # - mrluckypov.com/updates/
+      # - mrluckyraw.com/updates/
+      # - mrluckyvip.com/updates/
+      - rawattack.com/updates/
+      # - realsensual.com/updates/
+      # - spizoo.com/updates/
+      # - tagteampov.com/updates/
+      # - vlogxxx.com/updates/
     script:
       - python
       - SpizooMembers.py

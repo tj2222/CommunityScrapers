@@ -20,8 +20,6 @@ from py_common.config import get_config
 # + Scrapes scenes that are no longer visible to logged-out users.
 
 
-
-
 config = get_config(
     # CONFIG_NOTES
     # Set your member auth cookies (pcar...) here for each site to scrape member content.
@@ -223,7 +221,7 @@ def get_release_date(tree) -> str:
 
     # Note that the raw string may include content such as "Release date:"
     # Only date formats seen so far: MM/DD/YYYY and YYYY-MM-DD
-    xpath_expr = "//p[@class='date']"
+    xpath_expr = "//*[@class='date']"
     elements = tree.xpath(xpath_expr)
 
     if elements:
