@@ -13,17 +13,22 @@ from py_common.proxy import StashRequests
 from py_common.util import scraper_args
 from py_common.config import get_config
 
-# Scrapes from /members and /expired URLs on Spizoo network sites. Must set cookies in config.ini (see below)
+# Scrapes from /members and /expired URLs on Spizoo network sites. Must set cookies in config.ini (see below).
 # Even after a membership expires, Spizoo sites allow the user to access logged-in information via an /expired path.
 # Benefits over logged-out scraping:
 # + Scrapes tags from all sites. Some sites do not show tags on logged-out scene pages.
 # + Scrapes male performers, only visible on logged-in version of tagteampov.com (and perhaps other sites).
 # + Scrapes scenes that are not visible to logged-out users.
 
+# This scraper also supports scraping members/expired pages for scenes based on their public URLs, but this
+# is not enabled by default in SpizooMembers.yml, in order to avoid conflict with the logged-out Spizoo scraper.
+# Uncomment the relevant xyzwebsite.com/updates URLs in SpizooMembers.yml (and comment them out in Spizoo.yml
+# if you have it installed) to enable.
+
 
 config = get_config(
     # CONFIG_NOTES
-    # Set your member auth cookies here for each site to scrape member content.
+    # Set your cookies here for each site to scrape member content.
 
     # When using cookies for **active** accounts:
     # Cookies `PHPSESSID`, `LBSERVERID`, and `pcar%5fTWVtYmVycyBBcmVh` are used. Others are ignored.
@@ -93,7 +98,7 @@ def get_cookies_dict(domain: str, expired: bool = False) -> dict:
 
     Args:
         domain: The site domain.
-        expired: Whether the request will use /expired/ instead of /members/.
+        expired: Whether the config for this site says that the cookies are for an expired membership.
 
     Returns:
         A dictionary with only the necessary cookie keys and values, or an empty dict.
@@ -156,10 +161,10 @@ def get_url_for_scraping(url: str, expired: bool) -> str:
 
     Args:
         url: The scene URL.
-        expired: Whether the site uses /expired/ instead of /members/.
+        expired: Whether the config for this site says that the cookies are for an expired membership.
 
     Returns:
-        The normalized URL for scraping.
+        The normalized URL for scraping, or None if scraping isn't possible with the given inputs.
     """
     if re.search(r'/updates/', url, re.IGNORECASE):
         path = 'expired' if expired else 'members'
@@ -169,6 +174,10 @@ def get_url_for_scraping(url: str, expired: bool) -> str:
             url,
             flags=re.IGNORECASE
         )
+
+    if re.search(r"gallery.php\?id=", url, flags=re.IGNORECASE) and expired:
+        log.error("Sorry, but the older-style members URLs (gallery.php) can't be directly scraped with an expired membership cookie. Try looking for a public /updates URL for this scene or a /members/scenes URL.")
+        return None
 
     if expired:
         return re.sub(r'/members/scenes/', '/expired/scenes/', url, flags=re.IGNORECASE)
@@ -412,23 +421,18 @@ def scrape_scene_data(url: str) -> dict:
         A dictionary of scraped scene metadata.
     """
     domain = urlparse(url).netloc.lower()
-    expired = is_site_expired(domain)
+    expired = is_site_expired(domain)   
     url = get_url_for_scraping(url, expired)
+    if not url:
+        return {}
 
     log.debug(f"Scraping URL: {url}")
     
     cookies = get_cookies_dict(domain, expired)
 
-    # if not cookies:
-    #     presumed_public_url = get_presumed_public_url(url)
-    #     if check_public_url_validity(presumed_public_url):
-    #         log.warning(f"No cookie found for URL {url} . Returning public URL for the user scrape: {presumed_public_url}")
-    #         return {"urls": [presumed_public_url]}
-    #     else:
-    #         log.warning(f"No cookie found for URL {url}. Unable to find working public URL. Returning Members Only tag.")
-    #         wayback_url = f"https://web.archive.org/web/*/{presumed_public_url}"
-    #         log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
-    #         return {"tags": [{"name": "Members Only"}]}
+    if not cookies:
+        log.error(f"The SpizooMembers scraper requires cookies to be set in its config.ini file.")
+        return {}
     
     log.debug(f"Using cookie authentication (sending {len(cookies)} cookies)")
 
@@ -445,16 +449,19 @@ def scrape_scene_data(url: str) -> dict:
     canonical_links = tree.xpath("//link[@rel='canonical']/@href")
     scene_url = canonical_links[0].strip() if canonical_links else url
     scene_url = re.sub(r'/expired/scenes/', '/members/scenes/', scene_url, flags=re.IGNORECASE)
+    # Older style of members URLs are formatted like /members/gallery.php?id=3551&type=vids
+    # If we've fetched one of these, we can find the scene's new-style URL in an <a> whose href ends in "_vids.html".
+    if re.search(r"gallery.php\?id=", scene_url, flags=re.IGNORECASE):
+        a_hrefs = tree.xpath("//a/@href")
+        scene_url_a_elements = [href for href in a_hrefs if href.lower().endswith("_vids.html")]
+        scene_url = scene_url_a_elements[0].strip() if scene_url_a_elements else scene_url
 
     presumed_public_url = get_presumed_public_url(scene_url)
     public_url_is_valid = check_public_url_validity(presumed_public_url)
 
-    is_vip_scene = False
     title_text = get_scene_title(tree)
     if title_text:
         scene["title"] = title_text
-        if re.search(r"\bVIP\d?\b", title_text):
-            is_vip_scene = True
 
     date_str = get_release_date(tree)
     if date_str:
@@ -469,8 +476,6 @@ def scrape_scene_data(url: str) -> dict:
         scene["performers"] = performers
 
     scene["tags"] = get_tags(tree)
-    if is_vip_scene:
-        scene["tags"].append({"name": "Bonus Scenes"})
     if not public_url_is_valid:
         scene["tags"].append({"name": "Members Only"})
     if expired:
