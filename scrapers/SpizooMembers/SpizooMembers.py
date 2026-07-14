@@ -13,46 +13,58 @@ from py_common.proxy import StashRequests
 from py_common.util import scraper_args
 from py_common.config import get_config
 
-# Scrapes from /members and /expired URLs on Spizoo network sites
+# Scrapes from /members and /expired URLs on Spizoo network sites. Must set cookies in config.ini (see below)
+# Even after a membership expires, Spizoo sites allow the user to access logged-in information via an /expired path.
 # Benefits over logged-out scraping:
-# + Scrapes tags from all sites. Some do not show tags on logged-out scene pages.
-# + Scrapes male performers, not visible on logged-out version of tagteampov.com (and perhaps other sites).
-# + Scrapes scenes that are no longer visible to logged-out users.
+# + Scrapes tags from all sites. Some sites do not show tags on logged-out scene pages.
+# + Scrapes male performers, only visible on logged-in version of tagteampov.com (and perhaps other sites).
+# + Scrapes scenes that are not visible to logged-out users.
 
 
 config = get_config(
     # CONFIG_NOTES
-    # Set your member auth cookies (pcar...) here for each site to scrape member content.
-    # Can be the full cookie (name=value) or just the cookie value itself.
-    # e.g., CREAMHER_PCAR = pcar%5fTWVtYmVycyBBcmVh=RW..0K or CREAMHER_PCAR = RW...0K
+    # Set your member auth cookies here for each site to scrape member content.
+
+    # When using cookies for **active** accounts:
+    # Cookies `PHPSESSID`, `LBSERVERID`, and `pcar%5fTWVtYmVycyBBcmVh` are used. Others are ignored.
+    # Don't set SITEXYZ_IS_EXPIRED to true or 1. Can omit it or leave it blank or set it to false.
+
+    # When using cookies for **expired** accounts:
+    # Cookie `pcar%5fTWVtYmVycyBBcmVh` is used. Others are ignored.
+    # Set SITEXYZ_IS_EXPIRED to true or 1.
+
+    # Cookies should be set as a semicolon-delimited string of name=value pair(s) without any newlines.
+    # You may copy and paste Chrome network tools 'Request' tab "Cookie:" value.
+    # e.g., MRLUCKYVIP_COOKIES =PHPSESSID=c6a245halnn; LBSERVERID=dd7299; pcar%5fTWVtYmVycyBBcmVh=RW...0K
+    # or MRLUCKYVIP_COOKIES=pcar%5fTWVtYmVycyBBcmVh=RW...0K
     # Set SITEXYZ_IS_EXPIRED = true if your cookie for that site is for an expired membership.
     default="""
     # See CONFIG_NOTES in SpizooMembers.py for documentation
-    CREAMHER_PCAR =
+    CREAMHER_COOKIES =
     CREAMHER_IS_EXPIRED =
-    DRDADDYPOV_PCAR =
+    DRDADDYPOV_COOKIES =
     DRDADDYPOV_IS_EXPIRED =
-    FIRSTCLASSPOV_PCAR =
+    FIRSTCLASSPOV_COOKIES =
     FIRSTCLASSPOV_IS_EXPIRED =
-    GOTHGIRLFRIENDS_PCAR =
+    GOTHGIRLFRIENDS_COOKIES =
     GOTHGIRLFRIENDS_IS_EXPIRED =
-    GOTHGIRLFRIENDSVIP_PCAR =
+    GOTHGIRLFRIENDSVIP_COOKIES =
     GOTHGIRLFRIENDSVIP_IS_EXPIRED =
-    MRLUCKYLIFE_PCAR =
+    MRLUCKYLIFE_COOKIES =
     MRLUCKYLIFE_IS_EXPIRED =
-    MRLUCKYPOV_PCAR =
+    MRLUCKYPOV_COOKIES =
     MRLUCKYPOV_IS_EXPIRED =
-    MRLUCKYRAW_PCAR =
+    MRLUCKYRAW_COOKIES =
     MRLUCKYRAW_IS_EXPIRED =
-    MRLUCKYVIP_PCAR =
+    MRLUCKYVIP_COOKIES =
     MRLUCKYVIP_IS_EXPIRED =
-    RAWATTACK_PCAR =
+    RAWATTACK_COOKIES =
     RAWATTACK_IS_EXPIRED =
-    SPIZOO_PCAR =
+    SPIZOO_COOKIES =
     SPIZOO_IS_EXPIRED =
-    TAGTEAMPOV_PCAR =
+    TAGTEAMPOV_COOKIES =
     TAGTEAMPOV_IS_EXPIRED =
-    VLOGXXX_PCAR =
+    VLOGXXX_COOKIES =
     VLOGXXX_IS_EXPIRED =
 """
 )
@@ -76,32 +88,41 @@ def get_site_name(domain: str) -> str:
     return parts[-2] if len(parts) >= 2 else parts[0]
 
 
-def get_pcar_cookies_dict(domain: str) -> dict:
-    """Retrieves and prepares the PCAR session cookie dictionary for a domain.
+def get_cookies_dict(domain: str, expired: bool = False) -> dict:
+    """Retrieves and prepares the session cookie dictionary for a domain.
 
     Args:
         domain: The site domain.
+        expired: Whether the request will use /expired/ instead of /members/.
 
     Returns:
-        A dictionary with the PCAR cookie key and value, or an empty dict if not configured.
+        A dictionary with only the necessary cookie keys and values, or an empty dict.
     """
     site_key = get_site_name(domain).upper()
-    key = f"{site_key}_PCAR"
-
-    val = config[key]
+    val = config.config_dict.get(f"{site_key}_COOKIES") or config.config_dict.get(f"{site_key}_PCAR")
     if not val:
         return {}
 
+    #Strip double quotes in case user wrapped the value in them.
     val = str(val).strip().strip("\"'")
     cookies = {}
-    if "=" in val:
-        parts = val.split("=", 1)
-        if parts[0].strip().lower().startswith("pcar"):
-            cookies[parts[0].strip()] = parts[1].strip().strip("\"'")
-            return cookies
+    for part in val.split(";"):
+        part = part.strip()
+        if "=" in part:
+            k, v = part.split("=", 1)
+            cookies[k.strip()] = v.strip().strip("\"'")
 
-    cookies["pcar%5fTWVtYmVycyBBcmVh"] = val
-    return cookies
+    # Filter only necessary cookies based on page type
+    filtered_cookies = {}
+    for k, v in cookies.items():
+        k_lower = k.lower()
+        if k_lower.startswith("pcar"):
+            filtered_cookies[k] = v
+        elif not expired and k in ("PHPSESSID", "LBSERVERID"):
+            # When not an expired membership, these cookies are necessary in order to prevent a redirect to a deals/upsell page.
+            filtered_cookies[k] = v
+
+    return filtered_cookies
 
 
 def is_site_expired(domain: str) -> bool:
@@ -396,7 +417,7 @@ def scrape_scene_data(url: str) -> dict:
 
     log.debug(f"Scraping URL: {url}")
     
-    cookies = get_pcar_cookies_dict(domain)
+    cookies = get_cookies_dict(domain, expired)
 
     # if not cookies:
     #     presumed_public_url = get_presumed_public_url(url)
@@ -409,8 +430,7 @@ def scrape_scene_data(url: str) -> dict:
     #         log.debug(f"Scene would hypothetically have public URL of {presumed_public_url}, but it is not valid. You may try checking the Wayback Machine at {wayback_url}.")
     #         return {"tags": [{"name": "Members Only"}]}
     
-    cookies["warn"] = "true"
-    log.debug(f"Using cookie authentication (sending {len(cookies) - 1} candidates)")
+    log.debug(f"Using cookie authentication (sending {len(cookies)} cookies)")
 
     try:
         response = requests.get(url, cookies=cookies, timeout=10)
