@@ -214,8 +214,12 @@ PERFORMER_NAME_MAP = {
     "dirk": "Dirk Huge",
     "donny": "Donny Sins",
     "isiah": "Isiah Maxwell",
+    "john": "John Janiero",
     "lawson": "Lawson Jones",
+    "marlon": "Marlon Tesoro",
+    "randyd": "Randy Denmark",
     "ray": "Ray Black",
+    "rico": "Rico Reyes",
     "rion": "Rion King",
     "robby": "Robby Apples",
     # Girls
