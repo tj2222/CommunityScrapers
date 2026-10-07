@@ -211,6 +211,8 @@ def get_description(tree: html.HtmlElement) -> str | None:
 # These have been determined visually, often with the help of `cc1234475/visage`.
 PERFORMER_NAME_MAP = {
     # Guys
+    "aj": "Cesar Agustus",
+    "brock": "Broc Adams",
     "chrism2": "Chris Cock",
     "dick": "Dick James",
     "dirk": "Dirk Huge",
@@ -218,6 +220,7 @@ PERFORMER_NAME_MAP = {
     "isiah": "Isiah Maxwell",
     "jason": "Jason Amalfi",
     "john": "John Janiero",
+    "justin": "Justin Long",
     "lawson": "Lawson Jones",
     "marlon": "Marlon Tesoro",
     "randy": "Randy Rodman",
@@ -236,9 +239,13 @@ PERFORMER_NAME_MAP = {
     "darian": "Darians Fire",
     "fallon": "Fallon West",
     "janey": "Janey Web",
+    "karla": "Karla Lane",
     "lily": "Lilly Lixx",
     "lilyf": "Lilly Lit",
     "mia": "Mia Knight",
+    "molly": "Bonnie Grey",
+    "raven": "Slut Extreme Raven",
+    "riley": "Riley Reyes",
 }
 
 
