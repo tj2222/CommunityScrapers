@@ -246,6 +246,7 @@ PERFORMER_NAME_MAP = {
     "molly": "Bonnie Grey",
     "raven": "Slut Extreme Raven",
     "riley": "Riley Reyes",
+    "victoria": "Carol Foxxx",
 }
 
 
