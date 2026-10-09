@@ -1,0 +1,14 @@
+name: FinishesTheJobMembers
+# requires: py_common
+
+# TODO: Check/support additional domains
+
+sceneByURL:
+  - action: script
+    url:
+      - manojob.com/members/scene
+    script:
+      - python
+      - FinishesTheJobMembers.py
+      - scene-by-url
+
