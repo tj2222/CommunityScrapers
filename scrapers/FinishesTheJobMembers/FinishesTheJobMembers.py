@@ -15,6 +15,8 @@ ensure_requirements("lxml")
 
 requests = StashRequests()
 
+
+
 config = get_config(
     # CONFIG_NOTES
 
@@ -138,6 +140,22 @@ def get_image(tree: html.HtmlElement) -> str | None:
     return data_url
 
 
+def get_studio_name(tree: html.HtmlElement, url: str) -> tuple[str, str] | None:
+    """
+    Returns a tuple of (studio name, studio slug).
+    """
+    studio_name = tree.xpath("string(//h2)")
+    studio_slug = url.split("/")[-2]
+    return (studio_name, studio_slug)
+
+
+def get_urls(url: str, studio_name: str) -> list[str]:
+    pass
+
+
+def get_studio_code(url: str) -> str:
+    return "TODO"
+
 
 def scrape_scene_data(url: str) -> ScrapedScene:
     """Scrapes metadata for the scene at the URL.
@@ -182,12 +200,14 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     if image_url:
         scene["image"] = image_url
 
-    scene["studio"] = {"name": "TODO"}
+    studio_name, studio_slug = get_studio_name(tree, url)
+    scene["studio"] = {"name": studio_name}
+    log.info(f"Studio: {studio_name}, Slug: {studio_slug}")
 
-    scene["code"] = "TODO"
+    scene["code"] = get_studio_code(tree)
 
     # TODO include public URL if available
-    scene["urls"] = [url]
+    scene["urls"] = get_urls(url, studio_name)
 
     return scene
 
