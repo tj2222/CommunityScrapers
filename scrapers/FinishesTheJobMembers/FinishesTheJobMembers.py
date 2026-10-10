@@ -8,7 +8,7 @@ import base64
 import json
 import re
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from py_common.deps import ensure_requirements
 ensure_requirements("lxml")
@@ -20,17 +20,34 @@ requests = StashRequests()
 config = get_config(
     # CONFIG_NOTES
 
-    # Cookies should be set as a semicolon-delimited string of name=value pair(s) without any newlines.
+    # COOKIES should be set as a semicolon-delimited string of name=value pair(s) without any newlines.
     # You may copy and paste Chrome network tools 'Request' tab "Cookie:" value.
     # e.g., COOKIES = setup1_PSLOGIN=sUsll2; eteens=YY/69aljfoojfg|kljgg/420A==
     # Cookies `l3_s_usr`, `l3_s_val`, and `fabulouscash_llc_members_sites_session`
     # are used. Others are ignored.
 
+    # PREFERRED_DOMAIN should be set to one of: finishesthejob, manojob, thedicksuckers, or mrpov.
+    # This is the domain that will actually be used to fetch the scene pages, so should match the
+    # site that you are logged in to with your cookies. Because all of the sites allow access to
+    # all of the content (AFAIK), this doesn't impact what you can scrape, just whether you
+    # can scrape anything released under a different sub-studio than your subscription.
+
     default="""
     # See CONFIG_NOTES in FinishesTheJobMembers.py for documentation
     COOKIES =
+    PREFERRED_DOMAIN = 
 """
 )
+
+
+def get_scrapable_url(url: str) -> str:
+    preferred_domain = config.config_dict.get("PREFERRED_DOMAIN")
+    if not preferred_domain:
+        log.warning("No PREFERRED_DOMAIN is set; leaving URL as-is.")
+        return url
+    target_netloc = f"www.{preferred_domain.strip()}.com"
+    split = urlsplit(url)
+    return urlunsplit(split._replace(netloc=target_netloc))
 
 
 def get_cookies_dict() -> dict[str, str]:
@@ -54,7 +71,6 @@ def fetch_html_tree(url: str) -> html.HtmlElement | None:
     """Fetches HTML content from a URL and returns the parsed
        lxml HTML tree, with relative links converted to absolute."""
     cookies = get_cookies_dict()
-
     if not cookies:
         log.error("Exiting due to missing cookies")
         return None
@@ -149,12 +165,41 @@ def get_studio_name(tree: html.HtmlElement, url: str) -> tuple[str, str] | None:
     return (studio_name, studio_slug)
 
 
-def get_urls(url: str, studio_name: str) -> list[str]:
-    pass
+def check_public_url_validity(public_url: str) -> bool:
+    """
+    Returns true iff the public URL returns a 200 status code.
+    """
+    try:
+        # We disallow redirects because a hypothetical public URL for a scene which is not publicly
+        # visible redirects (302) to the tour index page.
+        response = requests.head(public_url, allow_redirects=False, timeout=5)
+        if response.status_code == 200:
+            log.debug(f"Public URL is valid (200): {public_url}")
+            return True
+        else:
+            log.debug(f"Public URL is invalid (status {response.status_code}): {public_url}")
+            return False
+    except Exception as e:
+        log.warning(f"Error checking public URL {public_url}: {e}")
+        return False
 
 
-def get_studio_code(url: str) -> str:
-    return "TODO"
+def get_urls(url: str, studio_slug: str) -> list[str]:
+    urls: list[str] = []
+    # Canonical members' URL:
+    target_netloc = f"www.{studio_slug}.com"
+    parsed = urlsplit(url)
+    urls.append(urlunsplit(parsed._replace(netloc=target_netloc)))
+    
+    # Check whether there's a public URL available
+    scene_slug = url.split("/")[-1]
+    hypothetical_public_url = f"https://www.{studio_slug}.com/scene/{studio_slug}/{scene_slug}"
+    if check_public_url_validity(hypothetical_public_url):
+        urls.append(hypothetical_public_url)
+    else:
+        log.debug(f"Public URL is not valid: {hypothetical_public_url}")
+    
+    return urls
 
 
 def scrape_scene_data(url: str) -> ScrapedScene:
@@ -167,6 +212,9 @@ def scrape_scene_data(url: str) -> ScrapedScene:
         A dictionary of scraped scene metadata.
     """
     log.debug(f"Scraping scene URL: {url}")
+
+    url = get_scrapable_url(url)
+    log.info(f"Using scrapable URL: {url}")
 
     tree = fetch_html_tree(url)
     if tree is None:
@@ -194,7 +242,6 @@ def scrape_scene_data(url: str) -> ScrapedScene:
         scene["performers"] = performers
 
     scene["tags"] = get_tags(tree)
-    # TODO: Check whether public page is available; add Members Only tag if not.
 
     image_url = get_image(tree)
     if image_url:
@@ -204,10 +251,9 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     scene["studio"] = {"name": studio_name}
     log.info(f"Studio: {studio_name}, Slug: {studio_slug}")
 
-    scene["code"] = get_studio_code(tree)
-
-    # TODO include public URL if available
-    scene["urls"] = get_urls(url, studio_name)
+    scene["urls"] = get_urls(url, studio_slug)
+    if all("members" in url for url in scene["urls"]):
+        scene["tags"].append({"name": "Members Only"})
 
     return scene
 
