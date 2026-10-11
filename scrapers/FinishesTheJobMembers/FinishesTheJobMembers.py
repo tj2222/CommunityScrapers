@@ -1,21 +1,28 @@
-from py_common.config import get_config
-from py_common.util import scraper_args
-from py_common.proxy import StashRequests
-from py_common.types import ScrapedScene, ScrapedTag, ScrapedPerformer
-from lxml import html
-import py_common.log as log
 import base64
+from datetime import datetime
 import json
 import re
-from datetime import datetime
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from py_common.deps import ensure_requirements
 ensure_requirements("lxml")
 
+from lxml import html
+
+from py_common.config import get_config
+import py_common.log as log
+from py_common.proxy import StashRequests
+from py_common.types import ScrapedPerformer, ScrapedScene, ScrapedTag
+from py_common.util import scraper_args
+
 requests = StashRequests()
 
-
+STUDIO_NAMES: dict[str, str] = {
+    "finishesthejob": "Finishes The Job",
+    "manojob": "Mano Job",
+    "mrpov": "Mr. POV",
+    "thedicksuckers": "The Dick Suckers",
+}
 
 config = get_config(
     # CONFIG_NOTES
@@ -35,7 +42,7 @@ config = get_config(
     default="""
     # See CONFIG_NOTES in FinishesTheJobMembers.py for documentation
     COOKIES =
-    PREFERRED_DOMAIN = 
+    PREFERRED_DOMAIN =
 """
 )
 
@@ -64,12 +71,14 @@ def get_cookies_dict() -> dict[str, str]:
     if necessary_cookies:
         log.error(f"Missing necessary cookies: {', '.join(necessary_cookies)}")
         return {}
+
     return cookies
 
 
 def fetch_html_tree(url: str) -> html.HtmlElement | None:
-    """Fetches HTML content from a URL and returns the parsed
-       lxml HTML tree, with relative links converted to absolute."""
+    """Fetches HTML content from a URL and returns the parsed lxml HTML tree,
+    with relative links converted to absolute.
+    """
     cookies = get_cookies_dict()
     if not cookies:
         log.error("Exiting due to missing cookies")
@@ -93,16 +102,17 @@ def get_scene_title(tree: html.HtmlElement) -> str | None:
 
 
 def get_release_date(tree: html.HtmlElement) -> str | None:
-    # Example date strings: `Jun 5th, 2026`, `May 23rd, 2014`
+    """Extracts and standardizes the release date in YYYY-MM-DD format."""
     for element in tree.xpath("//strong[contains(@class, 'text-muted')]"):
         text = element.text_content()
         log.info(f"Date text: {text}")
+        # Example date strings: `Jun 5th, 2026`, `May 23rd, 2014`
         matches = re.search(r'([A-Za-z]{3}) (\d{1,2})[a-z]{2}, (\d{4})', text)
         if matches:
             month, day, year = matches.groups()
             try:
                 dt = datetime.strptime(f"{month} {day} {year}", "%b %d %Y")
-                log.info(f"Date: {dt.strftime('%Y-%m-%d')}")
+                log.debug(f"Parsed release date: {dt.strftime('%Y-%m-%d')}")
                 return dt.strftime("%Y-%m-%d")
             except ValueError:
                 pass
@@ -122,7 +132,6 @@ def get_performers(tree: html.HtmlElement) -> list[ScrapedPerformer]:
         name = anchor.text_content().strip()
         performers.append({"name": name})
     return performers
-    
 
 
 def get_tags(tree: html.HtmlElement) -> list[ScrapedTag]:
@@ -139,13 +148,16 @@ def get_image(tree: html.HtmlElement) -> str | None:
     # and return the full image file as a base64 encoded data URI so that the client
     # doesn't need cookies to load the image.
     image_url = tree.xpath("string(//video//@poster)")
+    if not image_url:
+        log.warning("No video poster URL found")
+        return None
     absolute_image_url = urljoin(tree.base_url, image_url)
 
     try:
         response = requests.get(absolute_image_url, cookies=get_cookies_dict(), timeout=10)
         response.raise_for_status()
     except Exception as e:
-        log.error(f"Failed to fetch image URL '{image_url}': {e}")
+        log.error(f"Failed to fetch image URL '{absolute_image_url}': {e}")
         return None
 
     base64_string = base64.b64encode(response.content).decode("utf-8")
@@ -160,45 +172,53 @@ def get_studio_name(tree: html.HtmlElement, url: str) -> tuple[str, str] | None:
     """
     Returns a tuple of (studio name, studio slug).
     """
-    studio_name = tree.xpath("string(//h2)")
     studio_slug = url.split("/")[-2]
+    studio_name = STUDIO_NAMES.get(studio_slug, "")
+    if not studio_name:
+        studio_name = tree.xpath("string(//h2)")
     return (studio_name, studio_slug)
 
 
 def check_public_url_validity(public_url: str) -> bool:
-    """
-    Returns true iff the public URL returns a 200 status code.
-    """
+    """Returns True iff the public URL returns a 200 status code."""
     try:
         # We disallow redirects because a hypothetical public URL for a scene which is not publicly
         # visible redirects (302) to the tour index page.
-        response = requests.head(public_url, allow_redirects=False, timeout=5)
+        response = requests.head(public_url, allow_redirects=False, timeout=10)
         if response.status_code == 200:
             log.debug(f"Public URL is valid (200): {public_url}")
             return True
-        else:
-            log.debug(f"Public URL is invalid (status {response.status_code}): {public_url}")
-            return False
+        log.debug(f"Public URL is invalid (status {response.status_code}): {public_url}")
+        return False
     except Exception as e:
         log.warning(f"Error checking public URL {public_url}: {e}")
         return False
 
 
 def get_urls(url: str, studio_slug: str) -> list[str]:
+    """Builds canonical members URL and probes for an active public scene URL."""
     urls: list[str] = []
-    # Canonical members' URL:
-    target_netloc = f"www.{studio_slug}.com"
     parsed = urlsplit(url)
-    urls.append(urlunsplit(parsed._replace(netloc=target_netloc)))
-    
-    # Check whether there's a public URL available
-    scene_slug = url.split("/")[-1]
-    hypothetical_public_url = f"https://www.{studio_slug}.com/scene/{studio_slug}/{scene_slug}"
-    if check_public_url_validity(hypothetical_public_url):
-        urls.append(hypothetical_public_url)
+    path_parts = [p for p in parsed.path.split("/") if p]
+    scene_slug = path_parts[-1] if path_parts else ""
+
+    # Canonical members' URL:
+    if studio_slug:
+        target_netloc = f"www.{studio_slug}.com"
+        urls.append(urlunsplit(parsed._replace(netloc=target_netloc)))
     else:
-        log.debug(f"Public URL is not valid: {hypothetical_public_url}")
-    
+        urls.append(url)
+
+    # Check whether there's a public URL available
+    if studio_slug and scene_slug:
+        hypothetical_public_url = (
+            f"https://www.{studio_slug}.com/scene/{studio_slug}/{scene_slug}"
+        )
+        if check_public_url_validity(hypothetical_public_url):
+            urls.append(hypothetical_public_url)
+        else:
+            log.info(f"Public URL is not valid: {hypothetical_public_url} (this is expected to be the case sometimes)")
+
     return urls
 
 
@@ -214,7 +234,7 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     log.debug(f"Scraping scene URL: {url}")
 
     url = get_scrapable_url(url)
-    log.info(f"Using scrapable URL: {url}")
+    log.debug(f"Using scrapable URL: {url}")
 
     tree = fetch_html_tree(url)
     if tree is None:
@@ -249,10 +269,10 @@ def scrape_scene_data(url: str) -> ScrapedScene:
 
     studio_name, studio_slug = get_studio_name(tree, url)
     scene["studio"] = {"name": studio_name}
-    log.info(f"Studio: {studio_name}, Slug: {studio_slug}")
+    log.debug(f"Studio: {studio_name}, Slug: {studio_slug}")
 
     scene["urls"] = get_urls(url, studio_slug)
-    if all("members" in url for url in scene["urls"]):
+    if all("/members/" in u for u in scene["urls"]):
         scene["tags"].append({"name": "Members Only"})
 
     return scene
@@ -267,7 +287,4 @@ if __name__ == "__main__":
         if url:
             result = scrape_scene_data(url)
 
-    if result:
-        print(json.dumps(result))
-    else:
-        print(json.dumps({}))
+    print(json.dumps(result or {}))
