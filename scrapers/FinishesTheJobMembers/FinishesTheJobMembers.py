@@ -222,6 +222,36 @@ def get_urls(url: str, studio_slug: str) -> list[str]:
     return urls
 
 
+def get_extra_video_label(tree: html.HtmlElement, url: str) -> str | None:
+    fragment = urlsplit(url).fragment
+    if not fragment:
+        return None
+    label_regex: str | None = None
+    if fragment == "bts":
+        label_regex = r"behind the scenes"
+    elif fragment == "interview":
+        label_regex = r"interview"
+    elif fragment == "fly":
+        label_regex = r"fly"
+    elif fragment == "social":
+        label_regex = r"social"
+    elif fragment == "pop":
+        label_regex = r"cum.?shot"
+    else:
+        log.warning(f"Unknown fragment: {fragment}")
+        return None
+    
+    if label_regex:
+        source_anchors = tree.xpath("//a[contains(@class, 'changeSource')]")
+        for anchor in source_anchors:
+            text = anchor.text_content().strip()
+            if re.search(label_regex, text, re.IGNORECASE):
+                return text
+
+    log.warning(f"Could not find matching label for fragment '{fragment} by regex '{label_regex}")
+    return None    
+
+
 def scrape_scene_data(url: str) -> ScrapedScene:
     """Scrapes metadata for the scene at the URL.
 
@@ -241,8 +271,14 @@ def scrape_scene_data(url: str) -> ScrapedScene:
         return {}
 
     scene: ScrapedScene = {}
+    scene["tags"] = []
+
+    extra_video_label = get_extra_video_label(tree, url)
+    log.debug(f"Extra video label: {extra_video_label}")
 
     title_text = get_scene_title(tree)
+    if extra_video_label and title_text:
+        title_text += f" - {extra_video_label}"
     if title_text:
         scene["title"] = title_text
     else:
@@ -253,19 +289,9 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     if date_str:
         scene["date"] = date_str
 
-    description = get_description(tree)
-    if description:
-        scene["details"] = description
-
     performers = get_performers(tree)
     if performers:
         scene["performers"] = performers
-
-    scene["tags"] = get_tags(tree)
-
-    image_url = get_image(tree)
-    if image_url:
-        scene["image"] = image_url
 
     studio_name, studio_slug = get_studio_name(tree, url)
     scene["studio"] = {"name": studio_name}
@@ -274,6 +300,17 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     scene["urls"] = get_urls(url, studio_slug)
     if all("/members/" in u for u in scene["urls"]):
         scene["tags"].append({"name": "Members Only"})
+
+    if not extra_video_label:        
+        description = get_description(tree)
+        if description:
+            scene["details"] = description
+
+        scene["tags"].extend(get_tags(tree))
+
+        image_url = get_image(tree)
+        if image_url:
+            scene["image"] = image_url
 
     return scene
 
