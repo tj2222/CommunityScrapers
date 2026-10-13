@@ -168,6 +168,19 @@ def get_image(tree: html.HtmlElement) -> str | None:
     return data_url
 
 
+def parse_members_url(url: str) -> dict[str, str | None]:
+    url_pattern = r"https?://(?:www\.)?(?P<domain>[^.]+)\.[^/]+/members/scene/(?P<scene_number>\d+)/(?P<studio_slug>[^/]+)/(?P<scene_slug>[^/?#]+)(?:#(?P<fragment>[^#]+))?"
+    match = re.search(url_pattern, url)
+    if not match:
+        log.error(f"Failed to parse members URL: {url}")
+        return {}
+    return match.groupdict()
+
+
+def get_studio_slug(url: str) -> str | None:
+    return parse_members_url(url).get("studio_slug")
+
+
 def get_studio_name(tree: html.HtmlElement, url: str) -> tuple[str, str] | None:
     """
     Returns a tuple of (studio name, studio slug).
@@ -175,7 +188,7 @@ def get_studio_name(tree: html.HtmlElement, url: str) -> tuple[str, str] | None:
     studio_slug = url.split("/")[-2]
     studio_name = STUDIO_NAMES.get(studio_slug, "")
     if not studio_name:
-        studio_name = tree.xpath("string(//h2)")
+        studio_name = tree.xpath("string(//h2)").strip()
     return (studio_name, studio_slug)
 
 
@@ -248,7 +261,7 @@ def get_extra_video_label(tree: html.HtmlElement, url: str) -> str | None:
             if re.search(label_regex, text, re.IGNORECASE):
                 return text
 
-    log.warning(f"Could not find matching label for fragment '{fragment} by regex '{label_regex}")
+    log.warning(f"Could not find matching label for fragment '{fragment}' by regex '{label_regex}'")
     return None    
 
 
