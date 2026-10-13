@@ -17,10 +17,43 @@ from py_common.util import scraper_args
 
 requests = StashRequests()
 
+
+class FTJMUrl:
+    # "Finishes The Job Members URL"
+
+    URL_PATTERN = re.compile(r"https?://(?:www\.)?(?P<domain>[^.]+)\.[^/]+/members/scene/(?P<scene_number>\d+)/(?P<studio_slug>[^/]+)/(?P<scene_slug>[^/?#]+)(?:#(?P<fragment>[^#]+))?")
+    
+    def __init__(self, url: str) -> None:
+        match = self.URL_PATTERN.search(url)
+        if not match:
+            log.error(f"Failed to parse members URL: {url}")
+            raise ValueError(f"Failed to parse members URL: {url}")
+        # self.domain = match.group("domain")#
+        self._scene_number = match.group("scene_number")
+        self._studio_slug = match.group("studio_slug")
+        self._scene_slug = match.group("scene_slug")
+        self._fragment = match.group("fragment")
+    
+    def to_canonical(self) -> str:
+        return f"https://www.{self._studio_slug}.com/members/scene/{self._scene_number}/{self._studio_slug}/{self._scene_slug}"
+
+    def with_forced_domain(self, domain: str) -> str:
+        return f"https://www.{domain}.com/members/scene/{self._scene_number}/{self._studio_slug}/{self._scene_slug}"
+
+    def to_public(self) -> str:
+        return f"https://www.{self._studio_slug}.com/scene/{self._studio_slug}/{self._scene_slug}"
+
+    def get_studio_slug(self) -> str:
+        return self._studio_slug
+
+    def get_fragment(self) -> str:
+        return self._fragment
+
 STUDIO_NAMES: dict[str, str] = {
     "finishesthejob": "Finishes The Job",
     "manojob": "Mano Job",
     "mrpov": "Mr. POV",
+    "secretstash": "Secret Stash",
     "thedicksuckers": "The Dick Suckers",
 }
 
@@ -47,14 +80,8 @@ config = get_config(
 )
 
 
-def get_scrapable_url(url: str) -> str:
-    preferred_domain = config.config_dict.get("PREFERRED_DOMAIN")
-    if not preferred_domain:
-        log.warning("No PREFERRED_DOMAIN is set; leaving URL as-is.")
-        return url
-    target_netloc = f"www.{preferred_domain.strip()}.com"
-    split = urlsplit(url)
-    return urlunsplit(split._replace(netloc=target_netloc))
+def get_preferred_domain() -> str:
+    return config.config_dict.get("PREFERRED_DOMAIN")
 
 
 def get_cookies_dict() -> dict[str, str]:
@@ -168,28 +195,12 @@ def get_image(tree: html.HtmlElement) -> str | None:
     return data_url
 
 
-def parse_members_url(url: str) -> dict[str, str | None]:
-    url_pattern = r"https?://(?:www\.)?(?P<domain>[^.]+)\.[^/]+/members/scene/(?P<scene_number>\d+)/(?P<studio_slug>[^/]+)/(?P<scene_slug>[^/?#]+)(?:#(?P<fragment>[^#]+))?"
-    match = re.search(url_pattern, url)
-    if not match:
-        log.error(f"Failed to parse members URL: {url}")
-        return {}
-    return match.groupdict()
-
-
-def get_studio_slug(url: str) -> str | None:
-    return parse_members_url(url).get("studio_slug")
-
-
-def get_studio_name(tree: html.HtmlElement, url: str) -> tuple[str, str] | None:
-    """
-    Returns a tuple of (studio name, studio slug).
-    """
-    studio_slug = url.split("/")[-2]
+def get_studio_name(tree: html.HtmlElement, studio_slug: str) -> str:
     studio_name = STUDIO_NAMES.get(studio_slug, "")
     if not studio_name:
+        log.warning(f"No studio name found for slug '{studio_slug}'.")
         studio_name = tree.xpath("string(//h2)").strip()
-    return (studio_name, studio_slug)
+    return studio_name
 
 
 def check_public_url_validity(public_url: str) -> bool:
@@ -208,37 +219,16 @@ def check_public_url_validity(public_url: str) -> bool:
         return False
 
 
-def get_urls(url: str, studio_slug: str) -> list[str]:
-    """Builds canonical members URL and probes for an active public scene URL."""
-    urls: list[str] = []
-    parsed = urlsplit(url)
-    path_parts = [p for p in parsed.path.split("/") if p]
-    scene_slug = path_parts[-1] if path_parts else ""
-
-    # Canonical members' URL:
-    if studio_slug:
-        target_netloc = f"www.{studio_slug}.com"
-        urls.append(urlunsplit(parsed._replace(netloc=target_netloc)))
+def get_urls(url: FTJMUrl) -> list[str]:
+    urls: list[str] = [url.to_canonical()]
+    if check_public_url_validity(url.to_public()):
+        urls.append(url.to_public())
     else:
-        urls.append(url)
-
-    # Check whether there's a public URL available
-    if studio_slug and scene_slug:
-        hypothetical_public_url = (
-            f"https://www.{studio_slug}.com/scene/{studio_slug}/{scene_slug}"
-        )
-        if check_public_url_validity(hypothetical_public_url):
-            urls.append(hypothetical_public_url)
-        else:
-            log.info(f"Public URL is not valid: {hypothetical_public_url} (this is expected to be the case sometimes)")
-
+        log.info(f"Public URL is not valid: {url.to_public()} (this is expected to be the case sometimes)")
     return urls
 
 
-def get_extra_video_label(tree: html.HtmlElement, url: str) -> str | None:
-    fragment = urlsplit(url).fragment
-    if not fragment:
-        return None
+def get_extra_video_label(tree: html.HtmlElement, fragment: str) -> str | None:
     label_regex: str | None = None
     if fragment == "bts":
         label_regex = r"behind the scenes"
@@ -265,28 +255,35 @@ def get_extra_video_label(tree: html.HtmlElement, url: str) -> str | None:
     return None    
 
 
-def scrape_scene_data(url: str) -> ScrapedScene:
+def scrape_scene_data(input_url: str) -> ScrapedScene:
     """Scrapes metadata for the scene at the URL.
 
     Args:
-        url: The scene URL.
+        input_url: The scene URL.
 
     Returns:
         A dictionary of scraped scene metadata.
     """
-    log.debug(f"Scraping scene URL: {url}")
+    log.debug(f"Scraping scene URL: {input_url}")
 
-    url = get_scrapable_url(url)
-    log.debug(f"Using scrapable URL: {url}")
+    try:
+        url = FTJMUrl(input_url)
+    except:
+        log.error(f"Unable to parse URL: {input_url}")
+        return {}
 
-    tree = fetch_html_tree(url)
+    preferred_domain = get_preferred_domain()
+    if not preferred_domain:
+        log.warning("No PREFERRED_DOMAIN is set; using studio slug.")
+        preferred_domain = url.get_studio_slug()
+    tree = fetch_html_tree(url.with_forced_domain(preferred_domain))
     if tree is None:
         return {}
 
     scene: ScrapedScene = {}
     scene["tags"] = []
 
-    extra_video_label = get_extra_video_label(tree, url)
+    extra_video_label = get_extra_video_label(tree, url.get_fragment())
     log.debug(f"Extra video label: {extra_video_label}")
 
     title_text = get_scene_title(tree)
@@ -306,11 +303,10 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     if performers:
         scene["performers"] = performers
 
-    studio_name, studio_slug = get_studio_name(tree, url)
+    studio_name = get_studio_name(tree, url.get_studio_slug())
     scene["studio"] = {"name": studio_name}
-    log.debug(f"Studio: {studio_name}, Slug: {studio_slug}")
 
-    scene["urls"] = get_urls(url, studio_slug)
+    scene["urls"] = get_urls(url)
     if all("/members/" in u for u in scene["urls"]):
         scene["tags"].append({"name": "Members Only"})
 
