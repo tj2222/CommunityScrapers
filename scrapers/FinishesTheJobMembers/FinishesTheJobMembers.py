@@ -121,6 +121,7 @@ def fetch_html_tree(url: str) -> html.HtmlElement | None:
         return None
 
     tree = html.fromstring(response.content, base_url=url)
+    tree.make_links_absolute()
     return tree
 
 
@@ -174,11 +175,17 @@ def get_image(tree: html.HtmlElement) -> str | None:
     # Loading image requires cookies, so we'll fetch it now with the cookies we have
     # and return the full image file as a base64 encoded data URI so that the client
     # doesn't need cookies to load the image.
-    image_url = tree.xpath("string(//video//@poster)")
-    if not image_url:
-        log.warning("No video poster URL found")
-        return None
-    absolute_image_url = urljoin(tree.base_url, image_url)
+    absolute_image_url = None
+    relative_image_url = tree.xpath("string(//video//@poster)")
+    if relative_image_url:
+        # lxml's make_links_absolute() doesn't touch the `poster` attribute, so do it manually.
+        absolute_image_url = urljoin(tree.base_url, relative_image_url)
+    if not absolute_image_url:
+        log.debug("No video poster URL found. Trying static image.")
+        absolute_image_url = tree.xpath("string(//img[contains(@class, 'w-100')]/@src)").strip()
+        if not absolute_image_url:
+            log.warning("No image URL found")
+            return None
 
     try:
         response = requests.get(absolute_image_url, cookies=get_cookies_dict(), timeout=10)
