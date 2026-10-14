@@ -219,12 +219,14 @@ def check_public_url_validity(public_url: str) -> bool:
         return False
 
 
-def get_urls(url: FTJMUrl) -> list[str]:
+def get_urls(url: FTJMUrl, is_extra_video: bool = False) -> list[str]:
     urls: list[str] = [url.to_canonical()]
-    if check_public_url_validity(url.to_public()):
-        urls.append(url.to_public())
-    else:
-        log.info(f"Public URL is not valid: {url.to_public()} (this is expected to be the case sometimes)")
+    if not is_extra_video:
+        # "Extra videos", basicaly by definition, don't have "real" public URLs.
+        if check_public_url_validity(url.to_public()):
+            urls.append(url.to_public())
+        else:
+            log.info(f"Public URL is not valid: {url.to_public()} (this is expected to be the case sometimes)")
     return urls
 
 
@@ -306,7 +308,7 @@ def scrape_scene_data(input_url: str) -> ScrapedScene:
     studio_name = get_studio_name(tree, url.get_studio_slug())
     scene["studio"] = {"name": studio_name}
 
-    scene["urls"] = get_urls(url)
+    scene["urls"] = get_urls(url, extra_video_label is not None)
     if all("/members/" in u for u in scene["urls"]):
         scene["tags"].append({"name": "Members Only"})
 
