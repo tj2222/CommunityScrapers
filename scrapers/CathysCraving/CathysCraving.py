@@ -222,6 +222,7 @@ PERFORMER_NAME_MAP = {
     "john": "John Janiero",
     "justin": "Justin Long",
     "lawson": "Lawson Jones",
+    "lucky": "Lucky Star",
     "marlon": "Marlon Tesoro",
     "randy": "Randy Rodman",
     "randyd": "Randy Denmark",
@@ -229,6 +230,7 @@ PERFORMER_NAME_MAP = {
     "rico": "Rico Reyes",
     "rion": "Rion King",
     "robby": "Robby Apples",
+    "silvio": "Sylvio Mata",
     # Girls
     "aja": "Aja Cummings",
     "alanna": "Alana Thomas",
