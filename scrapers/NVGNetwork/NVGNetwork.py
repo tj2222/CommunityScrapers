@@ -180,7 +180,7 @@ def get_tags(scene_data: dict) -> list[ScrapedTag]:
     tag_list.append({"name": "Members Only"})
     # NVG always releases scenes with a temporary title of "omg the latest[...]", then sets a title a week or so later.
     # Consider the temporary titles to be stand-ins for an "unknown" title.
-    if scene_data.get("title", "").lower().startswith("omg the latest"):
+    if scene_data.get("short_title", "").lower().startswith("omg the latest"):
         tag_list.append({"name": "Unknown Title"})
 
     return tag_list
