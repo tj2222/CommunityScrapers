@@ -1,3 +1,4 @@
+from urllib.parse import urlparse
 from py_common.config import get_config
 from py_common.util import scraper_args
 from py_common.proxy import StashRequests
@@ -291,7 +292,7 @@ def get_image(tree: html.HtmlElement) -> str | None:
     # Loading image requires cookies, so we'll fetch it now with the cookies we have
     # and return the full image file as a base64 encoded data URI so that the client
     # doesn't need cookies to load the image.
-    img_src = tree.xpath("//img//@src")
+    img_src = tree.xpath(".//img//@src")
     if img_src:
         image_url = img_src[0]
         log.debug(f"Found image URL: {image_url}")
@@ -382,6 +383,95 @@ def scrape_scene_data(url: str) -> ScrapedScene:
     return scene
 
 
+def get_compilation_title(subtree: html.HtmlElement) -> str | None:
+    title_spans = subtree.xpath(".//span[contains(@class, 'compilation-title')]")
+    if not title_spans:
+        log.warning("Could not find compilation title <span>")
+        return None
+
+    # Use .text instead of .text_content() because at least one compilation entry (#comp11)
+    # has a malformed closing tag (`</font></b>` instead of `</span>`), causing lxml to nest
+    # the rest of the cell's elements inside the title <span>.
+    raw_title = title_spans[0].text or ""
+    title = " ".join(raw_title.split())
+    return title or None
+
+
+def get_compilation_description(subtree: html.HtmlElement) -> str | None:
+    paragraphs = subtree.xpath(".//p")
+    if not paragraphs:
+        log.warning("Could not find compilation description <p>")
+        return None
+
+    description = extract_text_with_linebreaks(paragraphs[0])
+    if description:
+        log.debug(f"Found compilation description: {description}")
+        return description
+    else:
+        log.warning("Could not find compilation description")
+        return None
+
+
+def scrape_compilation_scene_data(url: str) -> ScrapedScene:
+    """Special case for scraping compilation scenes, as they all have the same address but different fragments.
+
+    Args:
+        url: The scene URL.
+
+    Returns:
+        A dictionary of scraped scene metadata.
+    """
+    log.debug(f"Scraping compilation scene URL: {url}")
+
+    fragment = urlparse(url).fragment
+    if not fragment:
+        log.error(f"No fragment found in compilation URL: {url}")
+        return {}
+
+    tree = fetch_html_tree(url)
+    if tree is None:
+        return {}
+
+    # Each compilation section is preceded by `<a name="compXX"></a>` and contained
+    # in the immediately following `<table>` that has a `.compilation-title` span.
+    subtrees = tree.xpath(
+        f"//a[@name='{fragment}']/following::table[.//span[contains(@class, 'compilation-title')]][1]"
+    )
+    if not subtrees:
+        log.error(f"Could not find compilation section for fragment '#{fragment}'")
+        return {}
+
+    subtree = subtrees[0]
+    scene: ScrapedScene = {}
+
+    title_text = get_compilation_title(subtree)
+    if title_text:
+        scene["title"] = title_text
+    else:
+        log.error("Unable to find compilation title. Exiting")
+        return {}
+
+    description = get_compilation_description(subtree)
+    if description:
+        scene["details"] = description
+
+    scene["tags"] = [
+        {"name": "Members Only"},
+        {"name": "Compilation"},
+    ]
+
+    image_url = get_image(subtree)
+    if image_url:
+        scene["image"] = image_url
+
+    scene["studio"] = {"name": "Cathy's Craving"}
+    scene["urls"] = [url]
+
+    return scene
+
+    
+
+
 if __name__ == "__main__":
     op, args = scraper_args()
     result = None
@@ -389,7 +479,10 @@ if __name__ == "__main__":
     if op in ["scene-by-url", "scene-by-query-fragment"]:
         url = args.get("url")
         if url:
-            result = scrape_scene_data(url)
+            if "/peter/compilations/index.html#" in url:
+                result = scrape_compilation_scene_data(url)
+            else:
+                result = scrape_scene_data(url)
 
     if result:
         print(json.dumps(result))
